@@ -93,6 +93,7 @@
 #include <xcb/xcb_icccm.h>
 #endif
 #include "common/util.h"
+#include "include/layout_flags.h"
 
 /* macros */
 #define MAX(A, B) ((A) > (B) ? (A) : (B))
@@ -491,6 +492,7 @@ typedef struct Layout {
 	void (*arrange)(Monitor *);
 	const char *name;
 	uint32_t id;
+	uint32_t flags;
 } Layout;
 
 struct Monitor {
@@ -1527,6 +1529,17 @@ void applyrules(Client *c) {
 		appid = broken;
 	if (!(title = client_get_title(c)))
 		title = broken;
+
+	/* Debug: log initial rule state for this client */
+	fprintf(stderr, "[DBG] applyrules: client=%p appid='%s' title='%s' parent=%p client_is_float_type=%d initial_isfloating=%d mon=%p selmon=%p\n",
+			(void *)c, appid, title, (void *)parent, (int)client_is_float_type(c), (int)c->isfloating, (void *)mon, (void *)selmon);
+
+	if (mon && mon->pertag) {
+		const Layout *lt_dbg = mon->pertag->ltidxs[get_tags_first_tag_num(c->tags)];
+		if (lt_dbg)
+			fprintf(stderr, "[DBG] applyrules: chosen_layout for tags first=%u -> name='%s' id=%d flags=%u arrange=%p\n",
+				get_tags_first_tag_num(c->tags), lt_dbg->name ? lt_dbg->name : "(null)", lt_dbg->id, lt_dbg->flags, (void *)lt_dbg->arrange);
+	}
 
 	for (i = 0; i < config.window_rules_count; i++) {
 
@@ -4137,7 +4150,25 @@ mapnotify(struct wl_listener *listener, void *data) {
 		wl_list_insert(clients.prev, &c->link); // 尾部入栈
 	wl_list_insert(&fstack, &c->flink);
 
+	/* Debug: log monitor/selmon layout state immediately before applyrules */
+	if (selmon && selmon->pertag) {
+		const Layout *slt = selmon->pertag->ltidxs[selmon->pertag->curtag];
+		fprintf(stderr, "[DBG] mapnotify: client=%p before applyrules selmon=%p curtag=%u sel_layout='%s' id=%d flags=%u arrange=%p\n",
+				(void *)c, (void *)selmon, selmon->pertag->curtag,
+				slt && slt->name ? slt->name : "(null)", slt ? slt->id : -1, slt ? slt->flags : 0u, (void *)(slt ? slt->arrange : NULL));
+	}
+
 	applyrules(c);
+
+	/* Debug: log final floating/monitor/layout after applyrules */
+	{
+		const Layout *clt = NULL;
+		if (c->mon && c->mon->pertag)
+			clt = c->mon->pertag->ltidxs[get_tags_first_tag_num(c->tags)];
+		fprintf(stderr, "[DBG] mapnotify: client=%p after applyrules isfloating=%d mon=%p layout='%s' id=%d flags=%u arrange=%p\n",
+				(void *)c, (int)c->isfloating, (void *)c->mon,
+				clt && clt->name ? clt->name : "(null)", clt ? clt->id : -1, clt ? clt->flags : 0u, (void *)(clt ? clt->arrange : NULL));
+	}
 
 	if (!c->isfloating || c->force_tiled_state) {
 		client_set_tiled(c, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT |

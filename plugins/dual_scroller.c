@@ -17,6 +17,7 @@ typedef struct Layout {
 	void (*arrange)(Monitor *);
 	const char *name;
 	uint32_t id;
+	uint32_t flags;
 } Layout;
 
 /* Forward declarations from the compositor (available at runtime via plugin loading) */
@@ -26,7 +27,7 @@ typedef struct Client Client;
 /* These will be resolved at plugin load time by the compositor */
 
 /* Configuration */
-static float dual_scroller_default_split_ratio = 0.5f;  /* Top row takes 50% */
+static float dual_scroller_split = 0.5f;  /* Top row takes 50% */
 
 /* Per-client row state: map Client* -> row (0=top, 1=bottom, -1=unassigned) */
 #define MAX_CLIENTS 256
@@ -122,7 +123,7 @@ static int32_t adjust_dual_scroller_split(const Arg *arg) {
 	double delta = arg->f;
 	fprintf(stderr, "[DS] adjust_dual_scroller_split dispatch called, delta=%.3f\n", delta);
 	
-	double new_split = dual_scroller_default_split_ratio + delta;
+	double new_split = dual_scroller_split + delta;
 	
 	/* Clamp to [0.1, 0.9] to ensure both rows remain visible */
 	if (new_split < 0.1) {
@@ -134,8 +135,8 @@ static int32_t adjust_dual_scroller_split(const Arg *arg) {
 		new_split = 0.9;
 	}
 	
-	dual_scroller_default_split_ratio = new_split;
-	fprintf(stderr, "[DS] Split ratio set to %.2f\n", dual_scroller_default_split_ratio);
+	dual_scroller_split = new_split;
+	fprintf(stderr, "[DS] Split ratio set to %.2f\n", dual_scroller_split);
 	return 0;
 }
 
@@ -361,7 +362,8 @@ PluginInfo* plugin_init(void) {
 			.symbol = "DS",                        /* Symbol shown in status bar */
 			.arrange = dual_scroller_arrange,      /* Function to arrange windows */
 			.name = "dual_scroller",               /* Layout name for selection */
-			.id = 1000                             /* Unique ID for plugin layouts */
+			.id = 1000,                             /* Unique ID for plugin layouts */
+			.flags = LAYOUT_FLAG_SCROLLER | LAYOUT_FLAG_ROW
 		}
 	};
 

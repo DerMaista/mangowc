@@ -7,6 +7,7 @@
 #define PLUGIN_H
 
 #include <stdint.h>
+#include "../include/layout_flags.h"
 
 /* Forward declarations - these are defined in mango.c */
 typedef struct Monitor Monitor;

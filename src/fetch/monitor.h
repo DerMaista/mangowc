@@ -17,16 +17,36 @@ Monitor *dirtomon(enum wlr_direction dir) {
 
 bool is_scroller_layout(Monitor *m) {
 
-	if (m->pertag->ltidxs[m->pertag->curtag]->id == SCROLLER)
+	if (!m || !m->pertag)
+		return false;
+
+	const Layout *lt = m->pertag->ltidxs[m->pertag->curtag];
+	if (!lt)
+		return false;
+
+	/* Prefer explicit flag if provided by layout (built-in or plugin) */
+	if (lt->flags & LAYOUT_FLAG_SCROLLER)
 		return true;
 
-	if (m->pertag->ltidxs[m->pertag->curtag]->id == VERTICAL_SCROLLER)
+	/* Backwards compatibility: fallback to legacy id checks */
+	if (lt->id == SCROLLER || lt->id == VERTICAL_SCROLLER)
 		return true;
 
 	return false;
 }
 
 bool is_row_layout(Monitor *m) {
+	if (!m || !m->pertag)
+		return false;
+
+	const Layout *lt = m->pertag->ltidxs[m->pertag->curtag];
+	if (!lt)
+		return false;
+
+	if (lt->flags & LAYOUT_FLAG_ROW)
+		return true;
+
+	/* No built-in row layouts currently; keep fallback for future ids */
 	return false;
 }
 

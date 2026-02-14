@@ -18,6 +18,7 @@
 typedef struct Client Client;
 typedef struct Monitor Monitor;
 typedef struct Layout Layout;
+typedef struct Pertag Pertag;
 
 /* Client structure - must match the one in mango.c */
 struct Client {
@@ -158,7 +159,9 @@ struct Monitor {
 	int32_t gappiv; /* vertical gap between windows */
 	int32_t gappoh; /* horizontal outer gaps */
 	int32_t gappov; /* vertical outer gaps */
-	void *pertag;  /* Opaque Pertag structure */
+	Pertag *pertag;
+	uint32_t ovbk_current_tagset;
+	uint32_t ovbk_prev_tagset;
 	Client *sel, *prevsel;
 	int32_t isoverview;
 	int32_t is_in_hotarea;

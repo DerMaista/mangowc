@@ -52,6 +52,7 @@ typedef struct Layout {
 	void (*arrange)(Monitor *);
 	const char *name;
 	uint32_t id;
+    uint32_t flags;
 } Layout;
 
 /* Forward declarations from the compositor (available at runtime via plugin loading) */
@@ -441,7 +442,8 @@ PluginInfo* plugin_init(void) {
 			.symbol = "EX",                  /* Layout symbol */
 			.arrange = example_arrange,      /* Your arrange function */
 			.name = "example",               /* Configuration identifier */
-			.id = 1000                       /* Unique layout ID */
+			.id = 1000,                      /* Unique layout ID */
+			.flags = LAYOUT_FLAG_NONE
 		}
 		/*
 		// Example of adding a second layout:

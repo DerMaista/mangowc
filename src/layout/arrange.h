@@ -8,10 +8,17 @@ void restore_size_per(Monitor *m, Client *c) {
 
 	const Layout *current_layout = m->pertag->ltidxs[m->pertag->curtag];
 
-	if (current_layout->id == SCROLLER ||
-		current_layout->id == VERTICAL_SCROLLER || current_layout->id == GRID ||
-		current_layout->id == VERTICAL_GRID || current_layout->id == DECK ||
-		current_layout->id == VERTICAL_DECK || current_layout->id == MONOCLE) {
+	if (!current_layout)
+		return;
+
+	/* If the current layout is a scroller (plugin or builtin), or one of the
+	 * other layouts where size-per doesn't apply, bail out. Scrollers are
+	 * detected by flag if provided by a plugin, otherwise by legacy ids. */
+	if ((current_layout->flags & LAYOUT_FLAG_SCROLLER) ||
+		current_layout->id == SCROLLER || current_layout->id == VERTICAL_SCROLLER ||
+		current_layout->id == GRID || current_layout->id == VERTICAL_GRID ||
+		current_layout->id == DECK || current_layout->id == VERTICAL_DECK ||
+		current_layout->id == MONOCLE) {
 		return;
 	}
 
@@ -624,10 +631,12 @@ void resize_tile_client(Client *grabc, bool isdrag, int32_t offsetx,
 			   current_layout->id == VERTICAL_DECK) {
 		resize_tile_master_vertical(grabc, isdrag, offsetx, offsety, time,
 									current_layout->id);
-	} else if (current_layout->id == SCROLLER) {
-		resize_tile_scroller(grabc, isdrag, offsetx, offsety, time, false);
-	} else if (current_layout->id == VERTICAL_SCROLLER) {
-		resize_tile_scroller(grabc, isdrag, offsetx, offsety, time, true);
+	} else if ((current_layout->flags & LAYOUT_FLAG_SCROLLER) ||
+			   current_layout->id == SCROLLER ||
+			   current_layout->id == VERTICAL_SCROLLER) {
+		bool isvertical = (current_layout->flags & LAYOUT_FLAG_VERTICAL) ||
+						  (current_layout->id == VERTICAL_SCROLLER);
+		resize_tile_scroller(grabc, isdrag, offsetx, offsety, time, isvertical);
 	}
 }
 

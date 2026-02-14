@@ -792,12 +792,14 @@ int32_t centerwin(const Arg *arg) {
 		return 0;
 
 	Client *stack_head = get_scroll_stack_head(c);
-	if (selmon->pertag->ltidxs[selmon->pertag->curtag]->id == SCROLLER) {
-		stack_head->geom.x =
-			selmon->w.x + (selmon->w.width - stack_head->geom.width) / 2;
+	const Layout *lt = selmon->pertag->ltidxs[selmon->pertag->curtag];
+	if (lt && (lt->flags & LAYOUT_FLAG_ROW)) {
+		/* Row-based plugin layouts (e.g., dual-scroller) center vertically */
+		stack_head->geom.y = selmon->w.y + (selmon->w.height - stack_head->geom.height) / 2;
+	} else if (lt && (lt->id == VERTICAL_SCROLLER || (lt->flags & LAYOUT_FLAG_VERTICAL))) {
+		stack_head->geom.y = selmon->w.y + (selmon->w.height - stack_head->geom.height) / 2;
 	} else {
-		stack_head->geom.y =
-			selmon->w.y + (selmon->w.height - stack_head->geom.height) / 2;
+		stack_head->geom.x = selmon->w.x + (selmon->w.width - stack_head->geom.width) / 2;
 	}
 
 	arrange(selmon, false, false);
@@ -1663,9 +1665,17 @@ int32_t scroller_stack(const Arg *arg) {
 	if (c && (!client_only_in_one_tag(c) || c->isglobal || c->isunglobal))
 		return 0;
 
-	bool is_horizontal_layout =
-		c->mon->pertag->ltidxs[c->mon->pertag->curtag]->id == SCROLLER ? true
-																	   : false;
+	const Layout *lt = c->mon->pertag->ltidxs[c->mon->pertag->curtag];
+	bool is_horizontal_layout = false;
+	if (lt) {
+		if (lt->flags & LAYOUT_FLAG_SCROLLER) {
+			/* scroller layouts: horizontal unless explicitly vertical */
+			is_horizontal_layout = !(lt->flags & LAYOUT_FLAG_VERTICAL);
+		} else {
+			/* fallback to legacy id check */
+			is_horizontal_layout = (lt->id == SCROLLER);
+		}
+	}
 
 	Client *target_client = find_client_by_direction(c, arg, false, true);
 
