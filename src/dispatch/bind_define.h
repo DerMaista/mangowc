@@ -545,19 +545,21 @@ int32_t restore_minimized(const Arg *arg) {
 }
 
 int32_t setlayout(const Arg *arg) {
-	int32_t jk;
+	const Layout *layout;
 
-	for (jk = 0; jk < LENGTH(layouts); jk++) {
-		if (strcmp(layouts[jk].name, arg->v) == 0) {
-			selmon->pertag->ltidxs[selmon->pertag->curtag] = &layouts[jk];
-			clear_fullscreen_and_maximized_state(selmon);
-			arrange(selmon, false, false);
-			printstatus();
-			return 0;
-		}
+	if (!arg || !arg->v)
+		return 0;
+
+	layout = get_layout_by_name(arg->v);
+	if (layout) {
+		selmon->pertag->ltidxs[selmon->pertag->curtag] = layout;
+		clear_fullscreen_and_maximized_state(selmon);
+		arrange(selmon, false, false);
+		printstatus();
 	}
 	return 0;
 }
+
 
 int32_t setkeymode(const Arg *arg) {
 	snprintf(keymode.mode, sizeof(keymode.mode), "%.27s", arg->v);
@@ -958,10 +960,11 @@ int32_t switch_layout(const Arg *arg) {
 			target_layout_name = config.circle_layout[0];
 		}
 
-		for (ji = 0; ji < LENGTH(layouts); ji++) {
-			len = MAX(strlen(layouts[ji].name), strlen(target_layout_name));
-			if (strncmp(layouts[ji].name, target_layout_name, len) == 0) {
-				selmon->pertag->ltidxs[selmon->pertag->curtag] = &layouts[ji];
+		for (ji = 0; ji < get_layout_count(); ji++) {
+			const Layout *lt = get_layout_by_index(ji);
+			len = MAX(strlen(lt->name), strlen(target_layout_name));
+			if (strncmp(lt->name, target_layout_name, len) == 0) {
+				selmon->pertag->ltidxs[selmon->pertag->curtag] = lt;
 
 				break;
 			}
@@ -972,11 +975,13 @@ int32_t switch_layout(const Arg *arg) {
 		return 0;
 	}
 
-	for (jk = 0; jk < LENGTH(layouts); jk++) {
-		if (strcmp(layouts[jk].name,
+	for (jk = 0; jk < get_layout_count(); jk++) {
+		const Layout *lt = get_layout_by_index(jk);
+		if (strcmp(lt->name,
 				   selmon->pertag->ltidxs[selmon->pertag->curtag]->name) == 0) {
 			selmon->pertag->ltidxs[selmon->pertag->curtag] =
-				jk == LENGTH(layouts) - 1 ? &layouts[0] : &layouts[jk + 1];
+				(jk == get_layout_count() - 1) ? get_layout_by_index(0)
+											  : get_layout_by_index(jk + 1);
 			clear_fullscreen_and_maximized_state(selmon);
 			arrange(selmon, false, false);
 			printstatus();

@@ -1,0 +1,46 @@
+[1m[31m[ERROR]:[33m [31mbtn_left[33m can't bind to [31mNONE[33m mod key
+[1;31m╰─[1;33m[Index][0m [1;36m/home/christoph/.config/mango/config.conf[0m:[1;35m349[0m
+   [1;36m╰─[0;33mmousebind=NONE,btn_left,toggleoverview,1
+[0m
+
+[1m[31m[ERROR]:[33m [31mbtn_right[33m can't bind to [31mNONE[33m mod key
+[1;31m╰─[1;33m[Index][0m [1;36m/home/christoph/.config/mango/config.conf[0m:[1;35m350[0m
+   [1;36m╰─[0;33mmousebind=NONE,btn_right,killclient,0
+[0m
+
+Found plugin directory: ./plugins
+Loading plugins from ./plugins
+Loaded plugin: dual_scroller (v0.1.0) - Dual Scroller Layout - Two-row tiling with adjustable split
+  Registered 1 layout(s)
+Successfully loaded 1 plugin(s)
+2026-02-12 09:05:06 - [swaybg-1.2.1/main.c:282] Found config * for output WL-1 ((null))
+gnome-keyring-daemon: no process capabilities, insecure memory might get used
+GNOME_KEYRING_CONTROL=/run/user/1001/keyring
+Error: Daemon is already running.
+2026/02/12 09:05:06 [ERROR] - dbus: failed to acquire service name: File exists
+'impl->enter_count > 0' failed at ../pipewire/spa/plugins/support/loop.c:592 loop_leave()
+[32m  INFO[0m: Launching config: "/home/christoph/.config/quickshell/shell.qml"
+[32m  INFO[0m: Shell ID: "6b2bf2938f15bc52da5a7b91dfafa8cd" Path ID "6b2bf2938f15bc52da5a7b91dfafa8cd"
+[32m  INFO[0m: Saving logs to "/run/user/1001/quickshell/by-id/hai8ig6cat/log.qslog"
+CRITICAL: [dbus_cb_name_lost:1401] Cannot acquire 'org.freedesktop.Notifications': Name is acquired by 'dunst' with PID '2412'.
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Unsupported maximum keycode 708, clipping.
+>                   X11 cannot support keycodes above 255.
+> Warning:          Virtual modifier Hyper multiply defined
+>                   Using 0, ignoring 0
+> Warning:          Virtual modifier ScrollLock multiply defined
+>                   Using 0, ignoring 0
+Errors from xkbcomp are not fatal to the X server
+[32m  INFO[0m: Configuration Loaded
+[33m  WARN[97m qt.qpa.services[0m: Failed to register with host portal QDBusError("org.freedesktop.portal.Error.Failed", "Could not register app ID: Connection already associated with an application ID")
+The XKEYBOARD keymap compiler (xkbcomp) reports:
+> Warning:          Unsupported maximum keycode 708, clipping.
+>                   X11 cannot support keycodes above 255.
+> Warning:          Virtual modifier Hyper multiply defined
+>                   Using 0, ignoring 0
+> Warning:          Virtual modifier ScrollLock multiply defined
+>                   Using 0, ignoring 0
+Errors from xkbcomp are not fatal to the X server
+2026-02-12 16:48:31 - [swaybg-1.2.1/main.c:226] Destroying output WL-1 ((null))
+[32m  INFO[97m qt.qpa.wayland[0m: There are no outputs - creating placeholder screen
+[33m  WARN[0m: Layershell screen does not corrospond to a real screen. Letting the compositor pick.

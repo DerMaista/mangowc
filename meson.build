@@ -94,6 +94,9 @@ if get_option('asan')
   link_args += '-fsanitize=address'
 endif
 
+# Export symbols from the main executable so plugins can resolve them (tile, etc.)
+link_args += '-rdynamic'
+
 executable('mango',
   'src/mango.c',
   'src/common/util.c',

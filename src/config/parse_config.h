@@ -3763,11 +3763,10 @@ void parse_tagrule(Monitor *m) {
 
 		if (config.tag_rules_count > 0 && match_rule) {
 
-			for (jk = 0; jk < LENGTH(layouts); jk++) {
-				if (tr.layout_name &&
-					strcmp(layouts[jk].name, tr.layout_name) == 0) {
-					m->pertag->ltidxs[tr.id] = &layouts[jk];
-				}
+			if (tr.layout_name) {
+				const Layout *lt = get_layout_by_name(tr.layout_name);
+				if (lt)
+					m->pertag->ltidxs[tr.id] = lt;
 			}
 
 			if (tr.no_hide >= 0)

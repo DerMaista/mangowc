@@ -57,8 +57,8 @@ void dwl_ipc_manager_bind(struct wl_client *client, void *data,
 
 	zdwl_ipc_manager_v2_send_tags(manager_resource, LENGTH(tags));
 
-	for (uint32_t i = 0; i < LENGTH(layouts); i++)
-		zdwl_ipc_manager_v2_send_layout(manager_resource, layouts[i].symbol);
+	for (int32_t i = 0; i < get_layout_count(); i++)
+		zdwl_ipc_manager_v2_send_layout(manager_resource, get_layout_by_index(i)->symbol);
 }
 
 void dwl_ipc_manager_destroy(struct wl_resource *resource) {
@@ -155,7 +155,7 @@ void dwl_ipc_output_printstatus_to(DwlIpcOutput *ipc_output) {
 
 	zdwl_ipc_output_v2_send_layout(
 		ipc_output->resource,
-		monitor->pertag->ltidxs[monitor->pertag->curtag] - layouts);
+		get_layout_index(monitor->pertag->ltidxs[monitor->pertag->curtag]));
 	zdwl_ipc_output_v2_send_title(ipc_output->resource, title ? title : broken);
 	zdwl_ipc_output_v2_send_appid(ipc_output->resource, appid ? appid : broken);
 	zdwl_ipc_output_v2_send_layout_symbol(ipc_output->resource, symbol);
@@ -252,10 +252,10 @@ void dwl_ipc_output_set_layout(struct wl_client *client,
 		return;
 
 	monitor = ipc_output->mon;
-	if (index >= LENGTH(layouts))
+	if (index >= (uint32_t)get_layout_count())
 		index = 0;
 
-	monitor->pertag->ltidxs[monitor->pertag->curtag] = &layouts[index];
+	monitor->pertag->ltidxs[monitor->pertag->curtag] = get_layout_by_index(index);
 	clear_fullscreen_and_maximized_state(monitor);
 	arrange(monitor, false, false);
 	printstatus();
