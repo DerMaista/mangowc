@@ -813,8 +813,12 @@ arrange(Monitor *m, bool want_animation, bool from_view) {
 		total_master_inner_percent, master_num, stack_num);
 
 	if (m->isoverview) {
-		overviewlayout.arrange(m);
+		overview(m);
 	} else {
+		fprintf(stderr, "[ARRANGE] Calling layout arrange: layout_symbol=%s, arrange=%p, visible_tiling=%d\n",
+			m->pertag->ltidxs[m->pertag->curtag]->symbol,
+			m->pertag->ltidxs[m->pertag->curtag]->arrange,
+			m->visible_tiling_clients);
 		m->pertag->ltidxs[m->pertag->curtag]->arrange(m);
 	}
 

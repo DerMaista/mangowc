@@ -142,7 +142,7 @@ void dwl_ipc_output_printstatus_to(DwlIpcOutput *ipc_output) {
 	appid = focused ? client_get_appid(focused) : "";
 
 	if (monitor->isoverview) {
-		symbol = overviewlayout.symbol;
+		symbol = "OV";
 	} else {
 		symbol = monitor->pertag->ltidxs[monitor->pertag->curtag]->symbol;
 	}

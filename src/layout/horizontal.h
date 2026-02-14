@@ -443,6 +443,10 @@ void scroller(Monitor *m) {
 	free(tempClients); // 最后释放内存
 }
 
+/* `dual_scroller` layout is provided by the dual_scroller plugin when loaded.
+ * Core no longer implements this layout to avoid plugin-specific fields.
+ */
+
 void center_tile(Monitor *m) {
 	int32_t i, n = 0, h, r, ie = enablegaps, mw, mx, my, oty, ety, tw;
 	Client *c = NULL;

@@ -411,6 +411,7 @@ struct Client {
 	double old_master_mfact_per, old_master_inner_per, old_stack_inner_per;
 	double old_scroller_pproportion;
 	bool ismaster;
+    
 	bool cursor_in_upper_half, cursor_in_left_half;
 	bool isleftstack;
 	int32_t tearing_hint;
@@ -652,7 +653,7 @@ static void rendermon(struct wl_listener *listener, void *data);
 static void requestdecorationmode(struct wl_listener *listener, void *data);
 static void requestdrmlease(struct wl_listener *listener, void *data);
 static void requeststartdrag(struct wl_listener *listener, void *data);
-static void resize(Client *c, struct wlr_box geo, int32_t interact);
+void resize(Client *c, struct wlr_box geo, int32_t interact);  /* Exported for plugins */
 static void run(char *startup_cmd);
 static void setcursor(struct wl_listener *listener, void *data);
 static void setfloating(Client *c, int32_t floating);
@@ -799,24 +800,36 @@ static int32_t num_all_layouts = 0;
  */
 static const Layout *get_layout_by_name(const char *name) {
 	int32_t i;
-	if (!name)
+	if (!name) {
+		fprintf(stderr, "[CORE] get_layout_by_name: name is NULL\n");
 		return NULL;
+	}
+
+	fprintf(stderr, "[CORE] get_layout_by_name: searching for '%s' (num_all_layouts=%d)\n", name, num_all_layouts);
 
 	/* If unified layout array exists, search it (contains built-ins + plugins) */
 	if (num_all_layouts > 0 && all_layouts) {
 		for (i = 0; i < num_all_layouts; i++) {
-			if (strcmp(all_layouts[i].name, name) == 0)
+			fprintf(stderr, "[CORE]   Checking layout[%d]: name='%s' vs '%s'\n", 
+				i, all_layouts[i].name, name);
+			if (strcmp(all_layouts[i].name, name) == 0) {
+				fprintf(stderr, "[CORE] FOUND layout '%s' at index %d, arrange=%p\n", 
+					name, i, all_layouts[i].arrange);
 				return &all_layouts[i];
+			}
 		}
+		fprintf(stderr, "[CORE] Layout '%s' NOT found in all_layouts\n", name);
 		return NULL;
 	}
 
+	fprintf(stderr, "[CORE] all_layouts is empty, searching built-in layouts\n");
 	/* Fallback: search built-in layouts */
 	for (i = 0; i < LENGTH(layouts); i++) {
 		if (strcmp(layouts[i].name, name) == 0)
 			return &layouts[i];
 	}
 
+	fprintf(stderr, "[CORE] Layout '%s' NOT found anywhere\n", name);
 	return NULL;
 }
 
@@ -836,6 +849,9 @@ static void init_plugin_system(void) {
 	plugin_count = plugin_get_total_layouts();
 	num_all_layouts = total_builtin + plugin_count;
 
+	fprintf(stderr, "[CORE] init_plugin_system: total_builtin=%d, plugin_layouts=%d, total=%d\n",
+		total_builtin, plugin_count, num_all_layouts);
+
 	if (num_all_layouts > total_builtin) {
 		/* Allocate unified layouts array */
 		all_layouts = malloc(num_all_layouts * sizeof(Layout));
@@ -846,18 +862,26 @@ static void init_plugin_system(void) {
 
 		/* Copy built-in layouts */
 		memcpy(all_layouts, layouts, total_builtin * sizeof(Layout));
+		fprintf(stderr, "[CORE] Copied %d built-in layouts\n", total_builtin);
 
 		/* Add plugin layouts */
 		int32_t offset = total_builtin;
 		const LoadedPlugin *plugins = plugin_get_loaded(&plugin_count);
 		for (i = 0; i < plugin_count; i++) {
-			if (!plugins[i].info || !plugins[i].info->layouts)
+			if (!plugins[i].info || !plugins[i].info->layouts) {
+				fprintf(stderr, "[CORE] Plugin %d: no layouts\n", i);
 				continue;
+			}
+			fprintf(stderr, "[CORE] Plugin %d (%s): copying %d layouts\n", 
+				i, plugins[i].info->name, plugins[i].info->num_layouts);
 			Layout *plugin_layouts = (Layout *)plugins[i].info->layouts;
 			for (j = 0; j < plugins[i].info->num_layouts; j++) {
+				fprintf(stderr, "[CORE]   Layout %d: name='%s', symbol='%s', arrange=%p\n",
+					j, plugin_layouts[j].name, plugin_layouts[j].symbol, plugin_layouts[j].arrange);
 				all_layouts[offset++] = plugin_layouts[j];
 			}
 		}
+		fprintf(stderr, "[CORE] Final all_layouts setup complete: %d total layouts\n", num_all_layouts);
 	}
 }
 
@@ -880,7 +904,7 @@ static struct wlr_compositor *compositor;
 static struct wlr_xdg_shell *xdg_shell;
 static struct wlr_xdg_activation_v1 *activation;
 static struct wlr_xdg_decoration_manager_v1 *xdg_decoration_mgr;
-static struct wl_list clients; /* tiling order */
+struct wl_list clients; /* tiling order */
 static struct wl_list fstack;  /* focus order */
 static struct wl_list fadeout_clients;
 static struct wl_list fadeout_layers;
@@ -929,7 +953,7 @@ static struct wlr_box sgeom;
 static struct wl_list mons;
 static Monitor *selmon;
 
-static int32_t enablegaps = 1; /* enables gaps, used by togglegaps */
+int32_t enablegaps = 1; /* enables gaps, used by togglegaps */
 static int32_t axis_apply_time = 0;
 static int32_t axis_apply_dir = 0;
 static int32_t scroller_focus_lock = 0;
@@ -1079,87 +1103,6 @@ int32_t get_layout_index(const Layout *l) {
 		}
 	}
 	return 0;
-}
-
-/* Plugin helper: arrange monitor in simple two-row layout. This is exported
- * so plugins can call it without requiring internal struct definitions.
- */
-void plugin_arrange_dual_scroller(Monitor *m, float split, int32_t gap) {
-	if (!m)
-		return;
-
-	int32_t n = m->visible_tiling_clients;
-	if (n == 0)
-		return;
-
-	int32_t top_count = (n + 1) / 2;
-	int32_t bottom_count = n - top_count;
-
-	int ie = enablegaps;
-	int32_t cur_gappiv = ie ? m->gappiv : 0;
-	int32_t cur_gappih = ie ? m->gappih : 0;
-	int32_t cur_gappov = ie ? m->gappov : 0;
-	int32_t cur_gappoh = ie ? m->gappoh : 0;
-
-	cur_gappiv = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappiv;
-	cur_gappih = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappih;
-	cur_gappov = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappov;
-	cur_gappoh = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappoh;
-
-	int32_t top_cols = top_count > 0 ? top_count : 1;
-	int32_t bottom_cols = bottom_count > 0 ? bottom_count : 1;
-
-	int32_t total_inner_v_gaps = cur_gappiv * (((top_count > 0) ? (top_count - 1) : 0) + ((bottom_count > 0) ? (bottom_count - 1) : 0));
-	int32_t avail_h = m->w.height - 2 * cur_gappov - total_inner_v_gaps;
-	if (avail_h < 1)
-		avail_h = 1;
-
-	int32_t top_h = (int32_t)(avail_h * split);
-	int32_t bottom_h = avail_h - top_h;
-	if (bottom_count == 0) {
-		top_h = avail_h;
-		bottom_h = 0;
-	}
-	if (top_count == 0) {
-		top_h = 0;
-		bottom_h = avail_h;
-	}
-
-	int32_t top_y = m->w.y + cur_gappov;
-	int32_t bottom_y = top_y + top_h + ((top_count > 0 && bottom_count > 0) ? cur_gappiv : 0);
-
-	int32_t top_x = m->w.x + cur_gappoh;
-	int32_t bottom_x = m->w.x + cur_gappoh;
-
-	int32_t ti = 0, bi = 0, i = 0;
-	Client *c = NULL;
-	wl_list_for_each(c, &clients, link) {
-		if (!VISIBLEON(c, m) || !ISTILED(c))
-			continue;
-
-		if (i < top_count) {
-			int32_t cols = top_cols;
-			int32_t total_inner_h_gaps = cur_gappih * (cols - 1);
-			int32_t w = (m->w.width - 2 * cur_gappoh - total_inner_h_gaps) / cols;
-			if (w < 1) w = 1;
-			int32_t x = top_x + ti * (w + cur_gappih);
-			int32_t y = top_y;
-			struct wlr_box geo = {.x = x, .y = y, .width = w, .height = top_h};
-			resize(c, geo, 0);
-			ti++;
-		} else {
-			int32_t cols = bottom_cols;
-			int32_t total_inner_h_gaps = cur_gappih * (cols - 1);
-			int32_t w = (m->w.width - 2 * cur_gappoh - total_inner_h_gaps) / cols;
-			if (w < 1) w = 1;
-			int32_t x = bottom_x + bi * (w + cur_gappih);
-			int32_t y = bottom_y;
-			struct wlr_box geo = {.x = x, .y = y, .width = w, .height = bottom_h};
-			resize(c, geo, 0);
-			bi++;
-		}
-		i++;
-	}
 }
 
 #include "ext-protocol/all.h"
@@ -3159,6 +3102,7 @@ createnotify(struct wl_listener *listener, void *data) {
 	c = toplevel->base->data = ecalloc(1, sizeof(*c));
 	c->surface.xdg = toplevel->base;
 	c->bw = borderpx;
+    
 
 	LISTEN(&toplevel->base->surface->events.commit, &c->commit, commitnotify);
 	LISTEN(&toplevel->base->surface->events.map, &c->map, mapnotify);

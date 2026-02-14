@@ -29,6 +29,54 @@ typedef struct {
 	/* Future extensions for dispatch functions, config options, etc. */
 } PluginInfo;
 
+/* LoadedPlugin struct - used internally but needs to be visible to compositor */
+typedef struct {
+	void *handle;			  /* dlopen handle */
+	PluginInfo *info;		  /* Plugin info structure */
+	char path[256];			  /* Path to the .so file */
+} LoadedPlugin;
+
+/* Minimal FuncType used by plugin dispatch registration.
+ * Plugins may register functions matching the core signature:
+ *   int32_t fn(const Arg *);
+ * We use a void pointer here to avoid depending on parse_config.h in plugins.
+ */
+typedef int32_t (*PluginFuncType)(const void *);
+
+/**
+ * Register a dispatch function provided by a plugin. This is called by the
+ * plugin during its `plugin_init()` to make custom dispatch names available
+ * to the compositor's binding/parser.
+ */
+void plugin_register_dispatch(const char *name, PluginFuncType func);
+
+/**
+ * Lookup a dispatch registered by any plugin. Returns NULL if not found.
+ */
+PluginFuncType plugin_lookup_dispatch(const char *name);
+
+/**
+ * Load all plugins from a directory.
+ * If plugin_dir is NULL or empty, auto-detects standard plugin directories.
+ * Returns the number of successfully loaded plugins.
+ */
+int32_t plugin_load_all(const char *plugin_dir);
+
+/**
+ * Get all loaded plugins and their count.
+ */
+const LoadedPlugin *plugin_get_loaded(int32_t *out_count);
+
+/**
+ * Get total number of layouts provided by all loaded plugins.
+ */
+int32_t plugin_get_total_layouts(void);
+
+/**
+ * Unload all plugins (call at compositor shutdown).
+ */
+void plugin_unload_all(void);
+
 /**
  * All plugins must export this function with this exact signature:
  * PluginInfo* plugin_init(void)
@@ -38,11 +86,5 @@ typedef struct {
  * 
  * The returned PluginInfo should have a lifetime for the entire compositor session.
  */
-
-/* Helper for plugins: arrange monitor in dual-scroller two-row layout.
- * Implemented in the compositor so plugins don't need internal headers.
- * `split` is fraction for top row (0..1), `gap` is preferred gap in pixels.
- */
-void plugin_arrange_dual_scroller(struct Monitor *m, float split, int32_t gap);
 
 #endif /* PLUGIN_H */

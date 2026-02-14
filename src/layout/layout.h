@@ -12,10 +12,6 @@ static void vertical_grid(Monitor *m);
 static void vertical_scroller(Monitor *m);
 static void vertical_deck(Monitor *mon);
 static void tgmix(Monitor *m);
-
-/* layout(s) */
-Layout overviewlayout = {"󰃇", overview, "overview"};
-
 enum {
 	TILE,
 	SCROLLER,

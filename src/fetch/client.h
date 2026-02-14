@@ -160,6 +160,7 @@ Client *find_client_by_direction(Client *tc, const Arg *arg, bool findfloating,
 	Client *c = NULL;
 	Client **tempClients = NULL; // 初始化为 NULL
 	int32_t last = -1;
+    
 
 	// 第一次遍历，计算客户端数量
 	wl_list_for_each(c, &clients, link) {

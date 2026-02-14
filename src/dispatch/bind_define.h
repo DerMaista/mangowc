@@ -328,6 +328,7 @@ int32_t setmfact(const Arg *arg) {
 	return 0;
 }
 
+
 int32_t killclient(const Arg *arg) {
 	Client *c = NULL;
 	c = selmon->sel;
@@ -547,15 +548,23 @@ int32_t restore_minimized(const Arg *arg) {
 int32_t setlayout(const Arg *arg) {
 	const Layout *layout;
 
-	if (!arg || !arg->v)
+	fprintf(stderr, "[DISPATCH] setlayout called with arg='%s'\n", arg && arg->v ? (char*)arg->v : "(null)");
+
+	if (!arg || !arg->v) {
+		fprintf(stderr, "[DISPATCH] setlayout: invalid arg\n");
 		return 0;
+	}
 
 	layout = get_layout_by_name(arg->v);
 	if (layout) {
+		fprintf(stderr, "[DISPATCH] setlayout: found layout '%s', arrange=%p\n", arg->v, layout->arrange);
 		selmon->pertag->ltidxs[selmon->pertag->curtag] = layout;
+		fprintf(stderr, "[DISPATCH] setlayout: set layout pointer, calling arrange\n");
 		clear_fullscreen_and_maximized_state(selmon);
 		arrange(selmon, false, false);
 		printstatus();
+	} else {
+		fprintf(stderr, "[DISPATCH] setlayout: layout '%s' NOT found\n", (char*)arg->v);
 	}
 	return 0;
 }

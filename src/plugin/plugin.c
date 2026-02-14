@@ -17,11 +17,7 @@
 #define MAX_PLUGINS 32
 
 /* Plugin load information */
-typedef struct {
-	void *handle;			  /* dlopen handle */
-	PluginInfo *info;		  /* Plugin info structure */
-	char path[256];			  /* Path to the .so file */
-} LoadedPlugin;
+/* LoadedPlugin struct is now defined in plugin.h and imported here */
 
 /**
  * Find the plugins directory by checking multiple standard locations
@@ -66,6 +62,39 @@ static char* find_plugins_dir(void) {
 /* Global plugin registry */
 static LoadedPlugin loaded_plugins[MAX_PLUGINS];
 static int32_t num_loaded_plugins = 0;
+
+/* Plugin dispatch registry */
+#define MAX_PLUGIN_DISPATCHES 128
+static struct {
+	char *name;
+	PluginFuncType func;
+} plugin_dispatches[MAX_PLUGIN_DISPATCHES];
+static int32_t plugin_dispatch_count = 0;
+
+void plugin_register_dispatch(const char *name, PluginFuncType func) {
+	if (!name || !func || plugin_dispatch_count >= MAX_PLUGIN_DISPATCHES)
+		return;
+	/* Simple linear storage; duplicate names overwrite previous */
+	for (int i = 0; i < plugin_dispatch_count; ++i) {
+		if (strcmp(plugin_dispatches[i].name, name) == 0) {
+			plugin_dispatches[i].func = func;
+			return;
+		}
+	}
+	plugin_dispatches[plugin_dispatch_count].name = strdup(name);
+	plugin_dispatches[plugin_dispatch_count].func = func;
+	plugin_dispatch_count++;
+}
+
+PluginFuncType plugin_lookup_dispatch(const char *name) {
+	if (!name)
+		return NULL;
+	for (int i = 0; i < plugin_dispatch_count; ++i) {
+		if (strcmp(plugin_dispatches[i].name, name) == 0)
+			return plugin_dispatches[i].func;
+	}
+	return NULL;
+}
 
 /**
  * Load a single plugin from a .so file

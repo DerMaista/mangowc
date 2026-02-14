@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "../plugin/plugin.h"
+
 #ifndef SYSCONFDIR
 #define SYSCONFDIR "/etc"
 #endif
@@ -212,6 +214,7 @@ typedef struct {
 	int32_t scroller_focus_center;
 	int32_t scroller_prefer_center;
 	int32_t edge_scroller_pointer_focus;
+	float dual_scroller_default_split_ratio;
 	int32_t focus_cross_monitor;
 	int32_t exchange_cross_monitor;
 	int32_t scratchpad_cross_monitor;
@@ -1180,7 +1183,14 @@ FuncType parse_func_name(char *func_name, Arg *arg, char *arg_value,
 		func = scroller_stack;
 		(*arg).i = parse_direction(arg_value);
 	} else {
-		return NULL;
+		/* Unknown function name: try plugin-registered dispatches as a fallback */
+		PluginFuncType pfunc = plugin_lookup_dispatch(func_name);
+		if (pfunc) {
+			func = (FuncType)pfunc; /* cast PluginFuncType -> FuncType (compatible convention)
+									 plugin is responsible for argument expectations */
+		} else {
+			return NULL;
+		}
 	}
 	return func;
 }
@@ -3105,6 +3115,7 @@ void override_config(void) {
 	edge_scroller_pointer_focus =
 		CLAMP_INT(config.edge_scroller_pointer_focus, 0, 1);
 	scroller_structs = CLAMP_INT(config.scroller_structs, 0, 1000);
+    
 
 	// 主从布局设置
 	default_mfact = CLAMP_FLOAT(config.default_mfact, 0.1f, 0.9f);
@@ -3301,6 +3312,7 @@ void set_value_default() {
 		scroller_ignore_proportion_single;
 	config.scroller_focus_center = scroller_focus_center;
 	config.scroller_prefer_center = scroller_prefer_center;
+    
 	config.edge_scroller_pointer_focus = edge_scroller_pointer_focus;
 	config.focus_cross_monitor = focus_cross_monitor;
 	config.exchange_cross_monitor = exchange_cross_monitor;

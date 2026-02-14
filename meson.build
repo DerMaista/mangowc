@@ -97,7 +97,7 @@ endif
 # Export symbols from the main executable so plugins can resolve them (tile, etc.)
 link_args += '-rdynamic'
 
-executable('mango',
+mango_exe = executable('mango',
   'src/mango.c',
   'src/common/util.c',
   'src/ext-protocol/wlr_ext_workspace_v1.c',
