@@ -214,7 +214,6 @@ typedef struct {
 	int32_t scroller_focus_center;
 	int32_t scroller_prefer_center;
 	int32_t edge_scroller_pointer_focus;
-	float dual_scroller_default_split_ratio;
 	int32_t focus_cross_monitor;
 	int32_t exchange_cross_monitor;
 	int32_t scratchpad_cross_monitor;

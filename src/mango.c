@@ -978,6 +978,16 @@ struct dvec2 *baked_points_focus;
 struct dvec2 *baked_points_opafadein;
 struct dvec2 *baked_points_opafadeout;
 
+/* Exported accessor wrappers for plugins */
+Monitor *get_selmon(void) {
+	return selmon;
+}
+
+void arrange_mon(Monitor *m, bool want_animation, bool from_view) {
+	/* call internal static arrange implementation */
+	arrange(m, want_animation, from_view);
+}
+
 static struct wl_event_source *hide_source;
 static bool cursor_hidden = false;
 static bool tag_combo = false;

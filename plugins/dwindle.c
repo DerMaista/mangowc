@@ -52,6 +52,13 @@ typedef struct {
 	void *v3;        /* Third void pointer */
 } Arg;
 
+typedef struct DwindleNode {
+	struct wlr_box box;
+	Client *client;                     // NULL if internal node
+	struct DwindleNode *children[2];    // NULL for leaf nodes
+	bool split_horizontal;              // true = left/right, false = top/bottom
+} DwindleNode;
+
 /* ============================================================================
  * PLUGIN CONFIGURATION
  * ============================================================================
@@ -201,162 +208,145 @@ static int32_t example_action(const Arg *arg) {
 /* ============================================================================
  * MAIN LAYOUT ARRANGEMENT FUNCTION
  * ============================================================================
- * 
- * This is the core function that defines how you arrange windows on a monitor.
- * Called whenever the layout needs to be applied (windows added/removed,
- * configuration changes, etc.)
- * 
- * Function signature:
- *   static void layout_name_arrange(Monitor *m)
- * 
- * Parameters:
- *   @m: Pointer to the Monitor to arrange
- * 
- * Monitor structure provides:
- *   m->w                   - Monitor geometry (wlr_box with x, y, width, height)
- *   m->w.x, m->w.y         - Monitor position
- *   m->w.width, m->w.height - Monitor dimensions
- *   m->visible_tiling_clients - Count of visible tiled windows
- *   m->tagset[]            - Tag filtering information
- *   m->gappih, m->gappoh   - Horizontal gap sizes (inside, outside)
- *   m->gappiv, m->gappov   - Vertical gap sizes (inside, outside)
- *   (and other fields accessible via mango-types.h)
- * 
- * Client structure provides:
- *   c->mon                 - Monitor pointer (NULL if floating)
- *   c->tags                - Tag membership bitmask
- *   c->isfloating          - Whether window is floating
- *   c->isfullscreen        - Whether in fullscreen mode
- *   c->ismaximizescreen    - Maximized state
- *   c->isminimized         - Minimized state
- *   (and other fields accessible via mango-types.h)
- * 
- * Core functions available:
- *   resize(client, wlr_box_geo, interact_flag);
- *     - Resizes and positions a client to the given geometry
- *     - interact_flag: 0 for automatic resize, non-zero for interactive
- * 
- * Typical layout steps:
- * 1. Validate the monitor parameter
- * 2. Get the count of visible tiling clients on this monitor
- * 3. Handle the empty case (no clients to arrange)
- * 4. Allocate space to collect clients (if needed)
- * 5. Iterate clients and collect those on this monitor that are tiled
- * 6. Compute geometry based on your layout algorithm
- * 7. Call resize() to apply geometry to each client
- * 8. Handle gaps and smartgaps configuration
  */
 
-static void example_arrange(Monitor *m) {
-	if (!m) {
-		fprintf(stderr, "[EXAMPLE] Error: arrange called with NULL monitor\n");
-		return;
-	}
+// Dwindle layout
+// Each new window splits the space in half, alternating between
+// horizontal and vertical splits based on aspect ratio
 
-	/* Get the number of visible tiling clients on this monitor */
-	int32_t n = m->visible_tiling_clients;
-	fprintf(stderr, "[EXAMPLE] Arranging %d clients on monitor\n", n);
+static void dwindle(Monitor *m) {
+	int32_t i, n = 0;
+	Client *c = NULL;
+	Client **tempClients = NULL;
+	DwindleNode *nodes = NULL;
+	int32_t nodeCount = 0;
+
 	
-	/* Handle empty case early */
-	if (n == 0) {
-		fprintf(stderr, "[EXAMPLE] No visible tiling clients\n");
+	int32_t cur_gappiv = enablegaps ? m->gappiv : 0;
+	int32_t cur_gappih = enablegaps ? m->gappih : 0;
+	int32_t cur_gappov = enablegaps ? m->gappov : 0;
+	int32_t cur_gappoh = enablegaps ? m->gappoh : 0;
+
+	
+	cur_gappiv = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappiv;
+	cur_gappih = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappih;
+	cur_gappov = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappov;
+	cur_gappoh = smartgaps && m->visible_tiling_clients == 1 ? 0 : cur_gappoh;
+
+	const float split_width_multiplier = 1.0f;
+
+	n = m->visible_tiling_clients;
+
+	if (n == 0)
+		return;
+
+	if (n == 1) {
+		wl_list_for_each(c, &clients, link) {
+			if (!VISIBLEON(c, m) || !ISTILED(c))
+				continue;
+
+			resize(c,
+				   (struct wlr_box){.x = m->w.x + cur_gappoh,
+									.y = m->w.y + cur_gappov,
+									.width = m->w.width - 2 * cur_gappoh,
+									.height = m->w.height - 2 * cur_gappov},
+				   0);
+			return;
+		}
+	}
+
+	tempClients = malloc(n * sizeof(Client *));
+	if (!tempClients)
+		return;
+
+	i = 0;
+	wl_list_for_each(c, &clients, link) {
+		if (!VISIBLEON(c, m) || !ISTILED(c))
+			continue;
+		tempClients[i++] = c;
+	}
+
+	nodes = calloc(2 * n - 1, sizeof(DwindleNode));
+	if (!nodes) {
+		free(tempClients);
 		return;
 	}
 
-	/**
-	 * TODO: Implement your layout algorithm here
-	 * 
-	 * STEP 1: Allocate arrays to collect clients (if needed)
-	 * ------
-	 * Client **clients_list = malloc(n * sizeof(Client*));
-	 * if (!clients_list) return;  // Handle allocation failure
-	 * 
-	 * 
-	 * STEP 2: Collect visible tiled clients on this monitor
-	 * ------
-	 * int32_t count = 0;
-	 * Client *c;
-	 * wl_list_for_each(c, &clients, link) {
-	 *     // Skip clients on other monitors
-	 *     if (c->mon != m)
-	 *         continue;
-	 *     // Skip non-tiled windows
-	 *     if (!ISTILED(c))
-	 *         continue;
-	 *     // Skip hidden/untagged windows
-	 *     if (!VISIBLEON(c, m))
-	 *         continue;
-	 *     // c is a valid tiled, visible client on this monitor
-	 *     clients_list[count++] = c;
-	 * }
-	 * 
-	 * 
-	 * STEP 3: Get gap configuration
-	 * ------
-	 * int32_t gappx = enablegaps ? m->gappih : 0;  // Horizontal gap
-	 * int32_t gappy = enablegaps ? m->gappiv : 0;  // Vertical gap
-	 * if (smartgaps && n == 1) {
-	 *     gappx = gappy = 0;  // No gaps for single window
-	 * }
-	 * 
-	 * 
-	 * STEP 4: Calculate window geometries
-	 * ------
-	 * Example for master-slave layout:
-	 * {
-	 *     int32_t mw = m->w.width / 2;  // Master width
-	 *     int32_t x = m->w.x + gappx;
-	 *     int32_t y = m->w.y + gappy;
-	 *     int32_t h = m->w.height - 2*gappy;
-	 *     int32_t w = mw - 2*gappx;
-	 *     
-	 *     // First client is the master
-	 *     struct wlr_box geo = {.x = x, .y = y, .width = w, .height = h};
-	 *     resize(clients_list[0], geo, 0);
-	 *     
-	 *     // Remaining clients in slave column
-	 *     int32_t slave_w = (m->w.width - mw) / (n-1) - gappx;
-	 *     int32_t slave_x = mw + gappx;
-	 *     for (int i = 1; i < n; i++) {
-	 *         geo = (struct wlr_box){
-	 *             .x = slave_x,
-	 *             .y = y + (i-1)*(h+gappy)/(n-1),
-	 *             .width = slave_w,
-	 *             .height = h/(n-1)
-	 *         };
-	 *         resize(clients_list[i], geo, 0);
-	 *         slave_x += slave_w + gappx;
-	 *     }
-	 * }
-	 * 
-	 * 
-	 * STEP 5: Cleanup and logging
-	 * ------
-	 * free(clients_list);
-	 * fprintf(stderr, "[EXAMPLE] Arrange complete\n");
-	 */
+	nodes[0].box.x = m->w.x + cur_gappoh;
+	nodes[0].box.y = m->w.y + cur_gappov;
+	nodes[0].box.width = m->w.width - 2 * cur_gappoh;
+	nodes[0].box.height = m->w.height - 2 * cur_gappov;
+	nodes[0].client = tempClients[0];
+	nodes[0].children[0] = NULL;
+	nodes[0].children[1] = NULL;
+	nodeCount = 1;
 
-	/* MINIMAL EXAMPLE: Simple fullscreen layout
-	 * Place all clients fullscreen on top of each other
-	 * (Only the last one in the list is visible)
-	 */
+	for (i = 1; i < n; i++) {
+		DwindleNode *leafToSplit = NULL;
+		for (int32_t j = nodeCount - 1; j >= 0; j--) {
+			if (nodes[j].client != NULL) {
+				leafToSplit = &nodes[j];
+				break;
+			}
+		}
 
-	Client *c;
-	wl_list_for_each(c, &clients, link) {
-		if (c->mon != m)
-			continue;
+		if (!leafToSplit)
+			break;
 
-		/* Fullscreen geometry */
-		struct wlr_box geo = {
-			.x = m->w.x,
-			.y = m->w.y,
-			.width = m->w.width,
-			.height = m->w.height
-		};
-		resize(c, geo, 0);
+		bool splitHorizontal =
+			leafToSplit->box.width > leafToSplit->box.height * split_width_multiplier;
+
+		DwindleNode *child0 = &nodes[nodeCount++];
+		DwindleNode *child1 = &nodes[nodeCount++];
+
+		if (splitHorizontal) {
+			int32_t halfWidth = (leafToSplit->box.width - cur_gappih) / 2;
+
+			child0->box.x = leafToSplit->box.x;
+			child0->box.y = leafToSplit->box.y;
+			child0->box.width = halfWidth;
+			child0->box.height = leafToSplit->box.height;
+
+			child1->box.x = leafToSplit->box.x + halfWidth + cur_gappih;
+			child1->box.y = leafToSplit->box.y;
+			child1->box.width = leafToSplit->box.width - halfWidth - cur_gappih;
+			child1->box.height = leafToSplit->box.height;
+		} else {
+			int32_t halfHeight = (leafToSplit->box.height - cur_gappiv) / 2;
+
+			child0->box.x = leafToSplit->box.x;
+			child0->box.y = leafToSplit->box.y;
+			child0->box.width = leafToSplit->box.width;
+			child0->box.height = halfHeight;
+
+			child1->box.x = leafToSplit->box.x;
+			child1->box.y = leafToSplit->box.y + halfHeight + cur_gappiv;
+			child1->box.width = leafToSplit->box.width;
+			child1->box.height = leafToSplit->box.height - halfHeight - cur_gappiv;
+		}
+
+		child0->client = leafToSplit->client;
+		child0->children[0] = NULL;
+		child0->children[1] = NULL;
+
+		child1->client = tempClients[i];
+		child1->children[0] = NULL;
+		child1->children[1] = NULL;
+
+		leafToSplit->client = NULL;
+		leafToSplit->children[0] = child0;
+		leafToSplit->children[1] = child1;
+		leafToSplit->split_horizontal = splitHorizontal;
 	}
 
-	fprintf(stderr, "[EXAMPLE] Arrange complete\n");
+	for (i = 0; i < nodeCount; i++) {
+		if (nodes[i].client != NULL) {
+			resize(nodes[i].client, nodes[i].box, 0);
+		}
+	}
+
+	free(nodes);
+	free(tempClients);
 }
 
 /* ============================================================================
@@ -416,10 +406,10 @@ PluginInfo* plugin_init(void) {
 	 */
 	static Layout plugin_layouts[] = {
 		{
-			.symbol = "EX",                  /* Layout symbol */
-			.arrange = example_arrange,      /* Your arrange function */
-			.name = "example",               /* Configuration identifier */
-			.id = 1000,                      /* Unique layout ID */
+			.symbol = "DW",                  /* Layout symbol */
+			.arrange = dwindle,      /* Your arrange function */
+			.name = "dwindle",               /* Configuration identifier */
+			.id = 1200,                      /* Unique layout ID */
 			.flags = LAYOUT_FLAG_NONE
 		}
 		/*
@@ -439,9 +429,9 @@ PluginInfo* plugin_init(void) {
 	 * This is returned to the compositor and should be static.
 	 */
 	static PluginInfo info = {
-		.name = "example_plugin",
+		.name = "dwindle_plugin",
 		.version = "0.1.0",
-		.description = "Example plugin template - customize this description",
+		.description = "Dwindle layout plugin - a simple tiling layout",
 		.layouts = plugin_layouts,
 		.num_layouts = 1  /* Update if you add more layouts */
 	};

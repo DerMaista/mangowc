@@ -1,3 +1,26 @@
+/*
+ * PLUGIN TEMPLATE
+ * ===============
+ * This file demonstrates the structure and required elements for creating
+ * a window layout plugin for the mango compositor.
+ *
+ * To use this template:
+ * 1. Copy this file and rename it to your_plugin_name.c
+ * 2. Replace all occurrences of "example" with your plugin name
+ * 3. Implement your layout algorithm in the arrange function
+ * 4. Add/modify dispatch functions as needed
+ * 5. Update the plugin metadata in plugin_init()
+ *
+ * Key components:
+ * - Includes: plugin API and compositor types
+ * - Type definitions: Layout struct and custom data structures
+ * - External symbols: access compositor state (clients, globals)
+ * - Configuration: plugin-specific settings
+ * - Dispatch functions: entry points for keybindings/commands
+ * - Arrange function: the main layout logic (called for each monitor)
+ * - plugin_init(): initialization function (REQUIRED, must be exported)
+ */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,7 +84,7 @@ typedef struct {
  */
 
 /* Example: configuration for split ratio */
-static float example_config_split = 0.5f;  /* Default: 50% split */
+static float dual_scroller_default_split_ratio = 0.3f;
 
 /* TODO: Add more configuration variables as needed */
 
@@ -85,6 +108,11 @@ extern struct wl_list clients;  /* Global client list */
 extern int enablegaps;
 extern int smartgaps;
 extern void resize(Client *c, struct wlr_box geo, int interact);
+extern int scroller_prefer_center;
+extern int scroller_focus_center;
+extern int32_t scroller_structs;
+extern bool is_row_layout(Monitor *m);
+extern bool start_drag_window(Client *c, int edge);
 
 /* ============================================================================
  * USEFUL MACROS
@@ -178,185 +206,262 @@ static int32_t example_adjust_split(const Arg *arg) {
  * 
  * Return: 0 on success
  */
-static int32_t example_action(const Arg *arg) {
-	fprintf(stderr, "[EXAMPLE] Action dispatch called\n");
-	
-	/* TODO: Implement your custom action here
-	 * 
-	 * Example: count clients on focused monitor
-	 * {
-	 *     int count = 0;
-	 *     Client *c;
-	 *     wl_list_for_each(c, &clients, link) {
-	 *         if (ISTILED(c))
-	 *             count++;
-	 *     }
-	 *     fprintf(stderr, "[EXAMPLE] Tiled clients: %d\n", count);
-	 * }
-	 */
-	
+static int32_t togglerow(const Arg *arg) {
+	if (!selmon || !selmon->sel || !is_row_layout(selmon))
+		return 0;
+
+	Client *c = selmon->sel;
+
+	// Only toggle for tiled windows
+	if (c->isfloating || !ISSCROLLTILED(c) || !VISIBLEON(c, selmon))
+		return 0;
+
+	// Toggle the row (0 <-> 1)
+	if (c->dual_scroller_row == 0) {
+		c->dual_scroller_row = 1;
+	} else {
+		c->dual_scroller_row = 0;
+	}
+
+	// Trigger a relayout
+	arrange(selmon, false, false);
 	return 0;
 }
+
+static int32_t adjust_dual_scroller_split(const Arg *arg) {
+	float new_ratio;
+
+	if (!arg || !selmon)
+		return 0;
+
+	// Check if we're in a dual-scroller layout
+	if (!is_row_layout(selmon))
+		return 0;
+
+	// Calculate new ratio: if arg->f < 1.0, treat as relative adjustment, otherwise as absolute value
+	new_ratio = arg->f < 1.0 ? dual_scroller_default_split_ratio + arg->f : arg->f - 1.0;
+
+	// Clamp the ratio between 0.1 and 0.9
+	if (new_ratio < 0.1 || new_ratio > 0.9)
+		return 0;
+
+	dual_scroller_default_split_ratio = new_ratio;
+	arrange(selmon, false, false);
+	return 0;
+}
+
+
 
 /* ============================================================================
  * MAIN LAYOUT ARRANGEMENT FUNCTION
  * ============================================================================
- * 
- * This is the core function that defines how you arrange windows on a monitor.
- * Called whenever the layout needs to be applied (windows added/removed,
- * configuration changes, etc.)
- * 
- * Function signature:
- *   static void layout_name_arrange(Monitor *m)
- * 
- * Parameters:
- *   @m: Pointer to the Monitor to arrange
- * 
- * Monitor structure provides:
- *   m->w                   - Monitor geometry (wlr_box with x, y, width, height)
- *   m->w.x, m->w.y         - Monitor position
- *   m->w.width, m->w.height - Monitor dimensions
- *   m->visible_tiling_clients - Count of visible tiled windows
- *   m->tagset[]            - Tag filtering information
- *   m->gappih, m->gappoh   - Horizontal gap sizes (inside, outside)
- *   m->gappiv, m->gappov   - Vertical gap sizes (inside, outside)
- *   (and other fields accessible via mango-types.h)
- * 
- * Client structure provides:
- *   c->mon                 - Monitor pointer (NULL if floating)
- *   c->tags                - Tag membership bitmask
- *   c->isfloating          - Whether window is floating
- *   c->isfullscreen        - Whether in fullscreen mode
- *   c->ismaximizescreen    - Maximized state
- *   c->isminimized         - Minimized state
- *   (and other fields accessible via mango-types.h)
- * 
- * Core functions available:
- *   resize(client, wlr_box_geo, interact_flag);
- *     - Resizes and positions a client to the given geometry
- *     - interact_flag: 0 for automatic resize, non-zero for interactive
- * 
- * Typical layout steps:
- * 1. Validate the monitor parameter
- * 2. Get the count of visible tiling clients on this monitor
- * 3. Handle the empty case (no clients to arrange)
- * 4. Allocate space to collect clients (if needed)
- * 5. Iterate clients and collect those on this monitor that are tiled
- * 6. Compute geometry based on your layout algorithm
- * 7. Call resize() to apply geometry to each client
- * 8. Handle gaps and smartgaps configuration
- */
+*/
 
-static void example_arrange(Monitor *m) {
-	if (!m) {
-		fprintf(stderr, "[EXAMPLE] Error: arrange called with NULL monitor\n");
+
+// Dual-row scroller layout with independent scrolling
+// Top row: 30% of screen height, Bottom row: 70% of screen height
+void dual_scroller(Monitor *m) {
+	unsigned int i, n_top = 0, n_bottom = 0, n_total = 0;
+
+	Client *c = NULL;
+	Client **top_row_clients = NULL;
+	Client **bottom_row_clients = NULL;
+	struct wlr_box target_geom;
+
+	unsigned int cur_gappih = enablegaps ? m->gappih : 0;
+	unsigned int cur_gappoh = enablegaps ? m->gappoh : 0;
+	unsigned int cur_gappov = enablegaps ? m->gappov : 0;
+	unsigned int cur_gappiv = enablegaps ? m->gappiv : 0;
+
+	cur_gappih =
+		smartgaps && m->visible_scroll_tiling_clients == 1 ? 0 : cur_gappih;
+	cur_gappoh =
+		smartgaps && m->visible_scroll_tiling_clients == 1 ? 0 : cur_gappoh;
+	cur_gappov =
+		smartgaps && m->visible_scroll_tiling_clients == 1 ? 0 : cur_gappov;
+	cur_gappiv =
+		smartgaps && m->visible_scroll_tiling_clients == 1 ? 0 : cur_gappiv;
+
+	unsigned int max_client_width =
+		m->w.width - 2 * scroller_structs - cur_gappih;
+
+	n_total = m->visible_scroll_tiling_clients;
+
+	if (n_total == 0) {
 		return;
 	}
 
-	/* Get the number of visible tiling clients on this monitor */
-	int32_t n = m->visible_tiling_clients;
-	fprintf(stderr, "[EXAMPLE] Arranging %d clients on monitor\n", n);
-	
-	/* Handle empty case early */
-	if (n == 0) {
-		fprintf(stderr, "[EXAMPLE] No visible tiling clients\n");
-		return;
-	}
-
-	/**
-	 * TODO: Implement your layout algorithm here
-	 * 
-	 * STEP 1: Allocate arrays to collect clients (if needed)
-	 * ------
-	 * Client **clients_list = malloc(n * sizeof(Client*));
-	 * if (!clients_list) return;  // Handle allocation failure
-	 * 
-	 * 
-	 * STEP 2: Collect visible tiled clients on this monitor
-	 * ------
-	 * int32_t count = 0;
-	 * Client *c;
-	 * wl_list_for_each(c, &clients, link) {
-	 *     // Skip clients on other monitors
-	 *     if (c->mon != m)
-	 *         continue;
-	 *     // Skip non-tiled windows
-	 *     if (!ISTILED(c))
-	 *         continue;
-	 *     // Skip hidden/untagged windows
-	 *     if (!VISIBLEON(c, m))
-	 *         continue;
-	 *     // c is a valid tiled, visible client on this monitor
-	 *     clients_list[count++] = c;
-	 * }
-	 * 
-	 * 
-	 * STEP 3: Get gap configuration
-	 * ------
-	 * int32_t gappx = enablegaps ? m->gappih : 0;  // Horizontal gap
-	 * int32_t gappy = enablegaps ? m->gappiv : 0;  // Vertical gap
-	 * if (smartgaps && n == 1) {
-	 *     gappx = gappy = 0;  // No gaps for single window
-	 * }
-	 * 
-	 * 
-	 * STEP 4: Calculate window geometries
-	 * ------
-	 * Example for master-slave layout:
-	 * {
-	 *     int32_t mw = m->w.width / 2;  // Master width
-	 *     int32_t x = m->w.x + gappx;
-	 *     int32_t y = m->w.y + gappy;
-	 *     int32_t h = m->w.height - 2*gappy;
-	 *     int32_t w = mw - 2*gappx;
-	 *     
-	 *     // First client is the master
-	 *     struct wlr_box geo = {.x = x, .y = y, .width = w, .height = h};
-	 *     resize(clients_list[0], geo, 0);
-	 *     
-	 *     // Remaining clients in slave column
-	 *     int32_t slave_w = (m->w.width - mw) / (n-1) - gappx;
-	 *     int32_t slave_x = mw + gappx;
-	 *     for (int i = 1; i < n; i++) {
-	 *         geo = (struct wlr_box){
-	 *             .x = slave_x,
-	 *             .y = y + (i-1)*(h+gappy)/(n-1),
-	 *             .width = slave_w,
-	 *             .height = h/(n-1)
-	 *         };
-	 *         resize(clients_list[i], geo, 0);
-	 *         slave_x += slave_w + gappx;
-	 *     }
-	 * }
-	 * 
-	 * 
-	 * STEP 5: Cleanup and logging
-	 * ------
-	 * free(clients_list);
-	 * fprintf(stderr, "[EXAMPLE] Arrange complete\n");
-	 */
-
-	/* MINIMAL EXAMPLE: Simple fullscreen layout
-	 * Place all clients fullscreen on top of each other
-	 * (Only the last one in the list is visible)
-	 */
-
-	Client *c;
+	// First pass: count clients per row and assign unassigned clients
 	wl_list_for_each(c, &clients, link) {
-		if (c->mon != m)
-			continue;
+		if (VISIBLEON(c, m) && ISSCROLLTILED(c)) {
+			// Assign to bottom row by default if not assigned
+			if (c->dual_scroller_row == -1) {
+				c->dual_scroller_row = 1; // Default to bottom row
+			}
 
-		/* Fullscreen geometry */
-		struct wlr_box geo = {
-			.x = m->w.x,
-			.y = m->w.y,
-			.width = m->w.width,
-			.height = m->w.height
-		};
-		resize(c, geo, 0);
+			if (c->dual_scroller_row == 0) {
+				n_top++;
+			} else {
+				n_bottom++;
+			}
+		}
 	}
 
-	fprintf(stderr, "[EXAMPLE] Arrange complete\n");
+	// Allocate arrays for each row
+	if (n_top > 0) {
+		top_row_clients = malloc(n_top * sizeof(Client *));
+		if (!top_row_clients) {
+			return;
+		}
+	}
+
+	if (n_bottom > 0) {
+		bottom_row_clients = malloc(n_bottom * sizeof(Client *));
+		if (!bottom_row_clients) {
+			free(top_row_clients);
+			return;
+		}
+	}
+
+	// Fill row arrays
+	unsigned int top_idx = 0, bottom_idx = 0;
+	wl_list_for_each(c, &clients, link) {
+		if (VISIBLEON(c, m) && ISSCROLLTILED(c)) {
+			if (c->dual_scroller_row == 0) {
+				top_row_clients[top_idx++] = c;
+			} else {
+				bottom_row_clients[bottom_idx++] = c;
+			}
+		}
+	}
+
+	// Calculate row heights using configurable split ratio
+	unsigned int top_row_height = (unsigned int)((m->w.height - 2 * cur_gappov - cur_gappiv) * dual_scroller_default_split_ratio);
+	unsigned int bottom_row_height = m->w.height - 2 * cur_gappov - cur_gappiv - top_row_height;
+	unsigned int top_row_y = m->w.y + cur_gappov;
+	unsigned int bottom_row_y = top_row_y + top_row_height + cur_gappiv;
+
+	// Helper function to layout a single row
+	void layout_row(Client **row_clients, unsigned int n_row, unsigned int row_y,
+	                unsigned int row_height, bool is_top_row) {
+		if (n_row == 0) return;
+
+		Client *root_client = NULL;
+		int focus_index = -1;
+		bool need_scroller = false;
+
+		// Find focused client in this row
+		for (i = 0; i < n_row; i++) {
+			if (row_clients[i] == m->sel) {
+				root_client = row_clients[i];
+				focus_index = i;
+				break;
+			}
+		}
+
+		// If no focused client in this row, keep current scroll position
+		if (!root_client && n_row > 0) {
+			return;
+		}
+
+		// Check if scrolling is needed
+		if (root_client && !root_client->is_pending_open_animation &&
+			root_client->geom.x >= m->w.x + scroller_structs &&
+			root_client->geom.x + root_client->geom.width <=
+				m->w.x + m->w.width - scroller_structs) {
+			need_scroller = false;
+		} else {
+			need_scroller = true;
+		}
+
+		if (start_drag_window)
+			need_scroller = false;
+
+		// Layout focused client
+		if (focus_index >= 0 && root_client) {
+			target_geom.height = row_height;
+			target_geom.width = max_client_width * root_client->scroller_proportion;
+			target_geom.y = row_y;
+
+			// Handle fullscreen and maximize
+			if (root_client->isfullscreen) {
+				target_geom.height = m->m.height;
+				target_geom.width = m->m.width;
+				target_geom.y = m->m.y;
+				target_geom.x = m->m.x;
+				resize(root_client, target_geom, 0);
+			} else if (root_client->ismaximizescreen) {
+				target_geom.height = m->w.height - 2 * cur_gappov;
+				target_geom.width = m->w.width - 2 * cur_gappoh;
+				target_geom.y = m->w.y + cur_gappov;
+				target_geom.x = m->w.x + cur_gappoh;
+				resize(root_client, target_geom, 0);
+			} else if (need_scroller) {
+				// Determine if we should center
+				bool should_center = (scroller_focus_center ||
+					((!m->prevsel ||
+					  (ISSCROLLTILED(m->prevsel) &&
+					   (m->prevsel->scroller_proportion * max_client_width) +
+							   (root_client->scroller_proportion * max_client_width) >
+						   m->w.width - 2 * scroller_structs - cur_gappih)) &&
+					scroller_prefer_center));
+
+				// Top row: never center
+				if (is_top_row) {
+					should_center = false;
+				}
+
+				if (should_center) {
+					target_geom.x = m->w.x + (m->w.width - target_geom.width) / 2;
+				} else {
+					target_geom.x = root_client->geom.x > m->w.x + (m->w.width) / 2
+										? m->w.x + (m->w.width -
+													root_client->scroller_proportion *
+														max_client_width -
+													scroller_structs)
+										: m->w.x + scroller_structs;
+				}
+				resize(root_client, target_geom, 0);
+			} else {
+				target_geom.x = root_client->geom.x;
+				resize(root_client, target_geom, 0);
+			}
+		}
+
+		// Layout clients to the left of focused
+		for (i = focus_index - 1; i >= 0 && i < n_row; i--) {
+			c = row_clients[i];
+			target_geom.width = max_client_width * c->scroller_proportion;
+			target_geom.height = row_height;
+			target_geom.y = row_y;
+
+			if (!c->isfullscreen && !c->ismaximizescreen) {
+				target_geom.x = row_clients[i + 1]->geom.x - cur_gappih - target_geom.width;
+				resize(c, target_geom, 0);
+			}
+		}
+
+		// Layout clients to the right of focused
+		for (i = focus_index + 1; i < n_row; i++) {
+			c = row_clients[i];
+			target_geom.width = max_client_width * c->scroller_proportion;
+			target_geom.height = row_height;
+			target_geom.y = row_y;
+
+			if (!c->isfullscreen && !c->ismaximizescreen) {
+				target_geom.x = row_clients[i - 1]->geom.x + cur_gappih + row_clients[i - 1]->geom.width;
+				resize(c, target_geom, 0);
+			}
+		}
+	}
+
+	// Layout both rows independently
+	layout_row(top_row_clients, n_top, top_row_y, top_row_height, true);
+	layout_row(bottom_row_clients, n_bottom, bottom_row_y, bottom_row_height, false);
+
+	// Cleanup
+	free(top_row_clients);
+	free(bottom_row_clients);
 }
 
 /* ============================================================================
@@ -417,7 +522,7 @@ PluginInfo* plugin_init(void) {
 	static Layout plugin_layouts[] = {
 		{
 			.symbol = "EX",                  /* Layout symbol */
-			.arrange = example_arrange,      /* Your arrange function */
+			.arrange = dual_scroller,      /* Your arrange function */
 			.name = "example",               /* Configuration identifier */
 			.id = 1000,                      /* Unique layout ID */
 			.flags = LAYOUT_FLAG_NONE
@@ -461,7 +566,8 @@ PluginInfo* plugin_init(void) {
 	plugin_register_dispatch("adjust_split", (PluginFuncType)example_adjust_split);
 
 	fprintf(stderr, "[EXAMPLE] Registering dispatch: action\n");
-	plugin_register_dispatch("action", (PluginFuncType)example_action);
+	plugin_register_dispatch("togglerow", (PluginFuncType)togglerow);
+	plugin_register_dispatch("adjust_dual_scroller_split", (PluginFuncType)adjust_dual_scroller_split);
 
 	fprintf(stderr, "[EXAMPLE] Plugin initialization complete\n");
 	return &info;

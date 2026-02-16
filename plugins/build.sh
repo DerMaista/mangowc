@@ -53,6 +53,7 @@ gcc \
     $WAYLAND_CFLAGS \
     -I"$PROJECT_ROOT/src" \
     -DWLR_USE_UNSTABLE \
+    -DXWAYLAND \
     -D_POSIX_C_SOURCE=200809L \
     -o "$BUILD_DIR/lib${PLUGIN_NAME}.so" \
     "$PLUGIN_SOURCE" \

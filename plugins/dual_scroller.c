@@ -1,389 +1,275 @@
+/* Minimal Dual Scroller plugin
+ * Only contains what's necessary to declare the layout and related
+ * dispatches. Implementation is adapted from dual_scroller.md.
+ */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <wayland-server-core.h>
 #include <wlr/util/box.h>
 
-/* Include the plugin API definition */
+/* Plugin API and compositor types */
 #include "plugin/plugin.h"
-
-/* Include compositor type definitions for Client and Monitor */
 #include "mango-types.h"
 
-/* Define a local Layout struct compatible with the compositor's Layout */
+/* Local Layout type compatible with core Layout */
 typedef struct Layout {
-	const char *symbol;
-	void (*arrange)(Monitor *);
-	const char *name;
-	uint32_t id;
-	uint32_t flags;
+    const char *symbol;
+    void (*arrange)(Monitor *);
+    const char *name;
+    uint32_t id;
+    uint32_t flags;
 } Layout;
 
-/* Forward declarations from the compositor (available at runtime via plugin loading) */
-typedef struct Client Client;
+/* External symbols provided by the compositor at runtime */
+extern struct wl_list clients;
+extern int enablegaps;
+extern int smartgaps;
+extern int32_t scroller_structs;
+extern int32_t scroller_focus_center;
+extern int32_t scroller_prefer_center;
+/* plugin-local default split ratio to avoid relying on core symbols */
+static float dual_scroller_default_split_ratio = 0.3f;
+extern void resize(Client *c, struct wlr_box geo, int interact);
+/* Use accessors exported by the core instead of referencing globals
+ * or static functions directly. Prototypes live in mango-types.h */
+extern bool is_row_layout(Monitor *m);
 
-/* Stubs for macros we cannot fully define without compositor internals */
-/* These will be resolved at plugin load time by the compositor */
+/* Helper macros (ABI-compatible assumptions) */
+#define VISIBLEON(c, m) (((c)->mon == (m)) && ((c)->tags & (m)->tagset[(m)->seltags]))
+#define ISSCROLLTILED(c) ((c) && !(c)->isfloating && !(c)->isminimized && !(c)->iskilling && !(c)->ismaximizescreen && !(c)->isfullscreen && !(c)->isunglobal)
 
-/* Configuration */
-static float dual_scroller_split = 0.5f;  /* Top row takes 50% */
-
-/* Per-client row state: map Client* -> row (0=top, 1=bottom, -1=unassigned) */
+/* Per-client row state kept inside plugin to avoid touching core Client struct */
 #define MAX_CLIENTS 256
 static struct {
-	Client *client;
-	int32_t row;  /* 0 for top row, 1 for bottom row, -1 for unassigned */
+    Client *client;
+    int32_t row; /* 0 top, 1 bottom, -1 unassigned */
 } client_row_map[MAX_CLIENTS];
 static int32_t client_row_count = 0;
 
-/**
- * Get or set the row assignment for a client.
- * A client can be forced to a specific row using togglerow.
- */
 static int32_t get_client_row(Client *c) {
-	for (int i = 0; i < client_row_count; ++i) {
-		if (client_row_map[i].client == c)
-			return client_row_map[i].row;
-	}
-	return -1;  /* Unassigned - will be auto-distributed */
+    for (int i = 0; i < client_row_count; ++i) {
+        if (client_row_map[i].client == c)
+            return client_row_map[i].row;
+    }
+    return -1;
 }
 
 static void set_client_row(Client *c, int32_t row) {
-	for (int i = 0; i < client_row_count; ++i) {
-		if (client_row_map[i].client == c) {
-			client_row_map[i].row = row;
-			return;
-		}
-	}
-	/* Not found - add new entry */
-	if (client_row_count < MAX_CLIENTS) {
-		client_row_map[client_row_count].client = c;
-		client_row_map[client_row_count].row = row;
-		client_row_count++;
-	}
+    for (int i = 0; i < client_row_count; ++i) {
+        if (client_row_map[i].client == c) {
+            client_row_map[i].row = row;
+            return;
+        }
+    }
+    if (client_row_count < MAX_CLIENTS) {
+        client_row_map[client_row_count].client = c;
+        client_row_map[client_row_count].row = row;
+        client_row_count++;
+    }
 }
 
-/* External symbols from compositor that are available at plugin load time */
-extern struct wl_list clients;  /* Global client list */
-extern int enablegaps;
-extern int smartgaps;
-extern int32_t scroller_structs;  /* Side padding for scrolling */
-extern int32_t scroller_focus_center;  /* Center focused client */
-extern int32_t scroller_prefer_center;  /* Prefer centering when possible */
-
-/* Forward declaration of argument type from compositor */
-typedef struct {
-	int i;
-	int i2;
-	float f;
-	float f2;
-	uint32_t ui;
-	uint32_t ui2;
-	void *v;
-	void *v2;
-	void *v3;
-} Arg;
-
-/* Macro stubs - will use runtime knowledge of structures */
-#define VISIBLEON(c, m) (((c)->mon == (m)) && ((c)->tags & (m)->tagset[(m)->seltags]))
-#define ISTILED(c) ((c) && !(c)->isfloating && !(c)->isminimized && !(c)->iskilling && !(c)->ismaximizescreen && !(c)->isfullscreen && !(c)->isunglobal)
-
-/* Forward declaration for resize function from compositor */
-extern void resize(Client *c, struct wlr_box geo, int interact);
-
-/**
- * Dispatch: toggle row assignment for focused client
- * When called on a client, forces it to the opposite row (or clears forced assignment).
- * 
- * This version stores the intent; the actual toggle happens in arrange if we have
- * access to the focused client. Otherwise it's deferred.
- */
-static int32_t togglerow(const Arg *arg) {
-	fprintf(stderr, "[DS] togglerow dispatch called\n");
-	/* Note: Without direct access to selmon->sel, toggling requires compositor support.
-	 * This is a placeholder that signals the action occurred.
-	 * A future version could use a callback or shared state mechanism.
-	 */
-	fprintf(stderr, "[DS] togglerow: would toggle focused client's row\n");
-	return 0;
+/* Dispatch: toggle row assignment for focused client */
+static int32_t togglerow(const void *arg) {
+    Client *c = NULL;
+    Monitor *m_sel = get_selmon();
+    if (!m_sel || !m_sel->sel || !is_row_layout(m_sel))
+        return 0;
+    c = m_sel->sel;
+    if (c->isfloating || !ISSCROLLTILED(c) || !VISIBLEON(c, m_sel))
+        return 0;
+    int32_t row = get_client_row(c);
+    if (row == 0)
+        set_client_row(c, 1);
+    else
+        set_client_row(c, 0);
+    arrange_mon(m_sel, false, false);
+    return 0;
 }
 
-/**
- * Dispatch: adjust the split ratio between top and bottom rows
- * arg->f is the amount to change (e.g., +0.05 or -0.05)
- * The split ratio affects how the monitor height is divided between rows.
- */
-static int32_t adjust_dual_scroller_split(const Arg *arg) {
-	if (!arg) {
-		fprintf(stderr, "[DS] adjust_dual_scroller_split: NULL arg\n");
-		return 0;
-	}
-	
-	double delta = arg->f;
-	fprintf(stderr, "[DS] adjust_dual_scroller_split dispatch called, delta=%.3f\n", delta);
-	
-	double new_split = dual_scroller_split + delta;
-	
-	/* Clamp to [0.1, 0.9] to ensure both rows remain visible */
-	if (new_split < 0.1) {
-		fprintf(stderr, "[DS] Split ratio clamped to minimum 0.1\n");
-		new_split = 0.1;
-	}
-	if (new_split > 0.9) {
-		fprintf(stderr, "[DS] Split ratio clamped to maximum 0.9\n");
-		new_split = 0.9;
-	}
-	
-	dual_scroller_split = new_split;
-	fprintf(stderr, "[DS] Split ratio set to %.2f\n", dual_scroller_split);
-	return 0;
+/* Dispatch: adjust dual scroller split ratio */
+static int32_t adjust_dual_scroller_split(const void *arg) {
+    const struct { float f; } *a = arg;
+    float new_ratio;
+    Monitor *m_sel = get_selmon();
+    if (!a || !m_sel)
+        return 0;
+    if (!is_row_layout(m_sel))
+        return 0;
+    new_ratio = a->f < 1.0f ? dual_scroller_default_split_ratio + a->f : a->f - 1.0f;
+    if (new_ratio < 0.1f || new_ratio > 0.9f)
+        return 0;
+    dual_scroller_default_split_ratio = new_ratio;
+    arrange_mon(m_sel, false, false);
+    return 0;
 }
 
-/**
- * Dual Scroller Arrange Function with Per-Client Scrolling
- * 
- * Arranges windows in two independent rows with configurable split ratio.
- * Each client has a `scroller_proportion` that determines its width.
- * Implements scrolling/centering logic to keep focused window visible.
- * 
- * Algorithm:
- * 1. Assign clients to rows (0=top, 1=bottom)
- * 2. For each row:
- *    a. Find the focused client in that row (if any)
- *    b. Calculate its width based on scroller_proportion
- *    c. Position other clients before/after it
- *    d. Apply scrolling/centering logic to keep focused visible
- * 3. Apply gaps and smartgaps
+/* Compact dual scroller arrange implementation adapted from docs
+ * - collects ISSCROLLTILED clients on the monitor
+ * - assigns rows using Client::dual_scroller_row (defaults to bottom)
+ * - lays out each row independently using per-client scroller_proportion
  */
 static void dual_scroller_arrange(Monitor *m) {
-	if (!m) {
-		fprintf(stderr, "[DS] arrange called with NULL monitor\n");
-		return;
-	}
+    if (!m)
+        return;
 
-	int32_t n = m->visible_tiling_clients;
-	fprintf(stderr, "[DS] dual_scroller_arrange: monitor %p, visible_tiling_clients=%d\n", (void*)m, n);
-	
-	if (n == 0) {
-		fprintf(stderr, "[DS] No visible tiling clients, skipping arrange\n");
-		return;
-	}
+    printf("[DS] arrange: monitor=%p sel=%p tags=%u\n", (void *)m, (void *)m->sel, (unsigned)m->seltags);
 
-	/* Collect and assign clients to rows */
-	Client **top_row = malloc(n * sizeof(Client*));
-	Client **bottom_row = malloc(n * sizeof(Client*));
-	if (!top_row || !bottom_row) {
-		free(top_row);
-		free(bottom_row);
-		return;
-	}
-	
-	int32_t top_count = 0, bottom_count = 0;
-	Client *c = NULL;
-	
-	/* First pass: collect clients and assign to rows */
-	wl_list_for_each(c, &clients, link) {
-		if (c->mon != m)
-			continue;
-		
-		int32_t assigned_row = get_client_row(c);
-		if (assigned_row == 0) {
-			top_row[top_count++] = c;
-		} else if (assigned_row == 1) {
-			bottom_row[bottom_count++] = c;
-		} else {
-			/* Auto-assign: alternate between top and bottom */
-			if (top_count <= bottom_count) {
-				set_client_row(c, 0);
-				top_row[top_count++] = c;
-			} else {
-				set_client_row(c, 1);
-				bottom_row[bottom_count++] = c;
-			}
-		}
-	}
+    uint32_t n_total = m->visible_scroll_tiling_clients;
+    printf("[DS] arrange: visible_scroll_tiling_clients=%u visible_tiling_clients=%u\n", n_total, m->visible_tiling_clients);
+    if (n_total == 0) {
+        printf("[DS] arrange: nothing to do (n_total==0)\n");
+        return;
+    }
 
-	fprintf(stderr, "[DS] Row distribution: top=%d, bottom=%d (total=%d)\n", 
-		top_count, bottom_count, top_count + bottom_count);
+    Client *c = NULL;
+    uint32_t top_count = 0, bottom_count = 0;
 
-	/* Helper function to layout a single row with scroller behavior */
-	void layout_row(Client **row_clients, int32_t row_count, int32_t row_y, 
-	                int32_t row_height, Monitor *m, bool is_top_row) {
-		if (row_count == 0)
-			return;
+    /* first pass: ensure clients have a row and count */
+    wl_list_for_each(c, &clients, link) {
+        uint32_t ctags = c->tags;
+        uint32_t mtag = m->tagset[m->seltags];
+        bool vis = VISIBLEON(c, m);
+        bool scrolltiled = ISSCROLLTILED(c);
+        printf("[DS] client %p mon=%p m=%p tags=0x%08x mon_tag=0x%08x seltags_idx=%d isfloating=%d ismin=%d iskilling=%d ismaxscr=%d isfs=%d isunglobal=%d\n",
+               (void *)c, (void *)c->mon, (void *)m, (unsigned)ctags, (unsigned)mtag, (int)m->seltags,
+               (int)c->isfloating, (int)c->isminimized, (int)c->iskilling, (int)c->ismaximizescreen, (int)c->isfullscreen, (int)c->isunglobal);
+        if (!vis || !scrolltiled) {
+            printf("[DS] skipping client %p vis=%d scrolltiled=%d\n", (void *)c, vis, scrolltiled);
+            continue;
+        }
+        int32_t row = get_client_row(c);
+        if (row < 0) {
+            set_client_row(c, 1); /* default bottom */
+            printf("[DS] set default row for client %p -> bottom\n", (void *)c);
+        }
+        row = get_client_row(c);
+        if (row == 0)
+            top_count++;
+        else
+            bottom_count++;
+    }
 
-		int ie = enablegaps;
-		int32_t cur_gappih = ie ? m->gappih : 0;
-		int32_t cur_gappoh = ie ? m->gappoh : 0;
+    printf("[DS] counts: top=%u bottom=%u\n", top_count, bottom_count);
 
-		/* Apply smartgaps */
-		if (smartgaps && m->visible_tiling_clients == 1) {
-			cur_gappih = 0;
-			cur_gappoh = 0;
-		}
+    Client **top = NULL, **bottom = NULL;
+    top = top_count ? calloc(top_count, sizeof(Client *)) : NULL;
+    bottom = bottom_count ? calloc(bottom_count, sizeof(Client *)) : NULL;
+    if ((top_count && !top) || (bottom_count && !bottom)) {
+        free(top); free(bottom); return;
+    }
 
-		int32_t max_client_width = m->w.width - 2 * scroller_structs - cur_gappih;
-		if (max_client_width < 1)
-			max_client_width = 1;
+    /* fill arrays */
+    uint32_t ti = 0, bi = 0;
+    wl_list_for_each(c, &clients, link) {
+        if (!VISIBLEON(c, m) || !ISSCROLLTILED(c))
+            continue;
+        int32_t row = get_client_row(c);
+        if (row == 0)
+            top[ti++] = c;
+        else
+            bottom[bi++] = c;
+    }
 
-		fprintf(stderr, "[DS] layout_row: %d clients, max_client_width=%d\n", 
-			row_count, max_client_width);
+    printf("[DS] filled arrays: ti=%u bi=%u expected top=%u bottom=%u\n", ti, bi, top_count, bottom_count);
 
-		/* Simple approach: distribute clients proportionally
-		 * We can't reliably access per-client scroller_proportion due to ABI differences
-		 * Instead, use a fixed proportion for each client based on focus position */
-		
-		Client *focused = row_clients[0];
-		int32_t focus_idx = 0;
+    int ie = enablegaps;
+    int32_t cur_gappih = ie ? m->gappih : 0;
+    int32_t cur_gappov = ie ? m->gappov : 0;
+    if (smartgaps && m->visible_scroll_tiling_clients == 1) {
+        cur_gappih = cur_gappov = 0;
+    }
 
-		/* Focus the first visible non-floating client (simple heuristic) */
-		for (int32_t i = 0; i < row_count; i++) {
-			if (!row_clients[i]->isfloating && !row_clients[i]->isfullscreen) {
-				focused = row_clients[i];
-				focus_idx = i;
-				break;
-			}
-		}
+    int32_t max_client_width = m->w.width - 2 * scroller_structs - cur_gappih;
+    if (max_client_width < 1) max_client_width = 1;
 
-		/* Default width proportions: 50% for focused, rest split among others */
-		int32_t focused_width = max_client_width / 2;
-		if (row_count == 1) {
-			focused_width = max_client_width;  /* Single window: use full width */
-		}
+    int32_t avail_h = m->w.height - 2 * cur_gappov;
+    if (avail_h < 1) avail_h = 1;
+    int32_t top_h = (int32_t)(avail_h * dual_scroller_default_split_ratio);
+    int32_t bottom_h = avail_h - top_h;
+    if (bottom_count == 0) { top_h = avail_h; bottom_h = 0; }
+    if (top_count == 0) { top_h = 0; bottom_h = avail_h; }
 
-		int32_t focused_x = m->w.x + scroller_structs;
-		
-		/* Apply centering if configured */
-		if ((scroller_focus_center || scroller_prefer_center) && !is_top_row && row_count > 1) {
-			focused_x = m->w.x + (m->w.width - focused_width) / 2;
-		}
+    int32_t top_y = m->w.y + cur_gappov;
+    int32_t bottom_y = top_y + top_h + (top_count && bottom_count ? m->gappiv : 0);
 
-		struct wlr_box geo = {.x = focused_x, .y = row_y, 
-			                  .width = focused_width, .height = row_height};
-		resize(focused, geo, 0);
+    /* helper to layout a row */
+    void layout_row(Client **row, uint32_t nrow, int32_t row_y, int32_t row_h, bool is_top) {
+        if (!nrow) return;
+        /* choose focused client if any */
+        int focus_idx = 0;
+        for (uint32_t i = 0; i < nrow; ++i)
+            if (row[i] == m->sel) { focus_idx = i; break; }
 
-		fprintf(stderr, "[DS]   [%s] focused[%d]: x=%d w=%d\n", 
-			is_top_row ? "TOP" : "BOT", focus_idx, focused_x, focused_width);
+        Client *focused = row[focus_idx];
+        int32_t focused_width = (nrow == 1) ? max_client_width : (max_client_width / 2);
+        struct wlr_box geo = {0};
+        geo.y = row_y; geo.height = row_h; geo.width = focused_width;
 
-		/* Layout clients to the left */
-		int32_t left_count = focus_idx;
-		int32_t left_width = (left_count > 0) ? (max_client_width - focused_width) / left_count : 0;
-		
-		int32_t left_x = focused_x - cur_gappih;
-		for (int32_t i = focus_idx - 1; i >= 0; i--) {
-			Client *lc = row_clients[i];
-			left_x -= left_width;
+        /* center logic simplified per docs */
+        if ((scroller_focus_center || scroller_prefer_center) && !is_top && nrow > 1)
+            geo.x = m->w.x + (m->w.width - focused_width) / 2;
+        else
+            geo.x = m->w.x + scroller_structs;
 
-			geo = (struct wlr_box){.x = left_x, .y = row_y, 
-				                   .width = left_width, .height = row_height};
-			resize(lc, geo, 0);
+        printf("[DS] resize focused %p at x=%d y=%d w=%d h=%d\n", (void *)focused, geo.x, geo.y, geo.width, geo.height);
+        resize(focused, geo, 0);
 
-			fprintf(stderr, "[DS]     left[%d]: x=%d w=%d\n", i, left_x, left_width);
-			left_x -= cur_gappih;
-		}
+        /* left of focus */
+        int32_t left_x = geo.x;
+        for (int i = focus_idx - 1; i >= 0; --i) {
+            Client *lc = row[i];
+            int32_t w = max_client_width / nrow;
+            left_x -= (w + cur_gappih);
+            geo.x = left_x; geo.width = w;
+            printf("[DS] resize left %p at x=%d y=%d w=%d h=%d\n", (void *)lc, geo.x, geo.y, geo.width, geo.height);
+            resize(lc, geo, 0);
+        }
 
-		/* Layout clients to the right */
-		int32_t right_count = row_count - focus_idx - 1;
-		int32_t right_width = (right_count > 0) ? (max_client_width - focused_width) / right_count : 0;
-		
-		int32_t right_x = focused_x + focused_width + cur_gappih;
-		for (int32_t i = focus_idx + 1; i < row_count; i++) {
-			Client *rc = row_clients[i];
+        /* right of focus */
+        int32_t right_x = geo.x + geo.width + cur_gappih;
+        for (uint32_t i = focus_idx + 1; i < nrow; ++i) {
+            Client *rc = row[i];
+            int32_t w = max_client_width / nrow;
+            geo.x = right_x; geo.width = w;
+            printf("[DS] resize right %p at x=%d y=%d w=%d h=%d\n", (void *)rc, geo.x, geo.y, geo.width, geo.height);
+            resize(rc, geo, 0);
+            right_x += w + cur_gappih;
+        }
+    }
 
-			geo = (struct wlr_box){.x = right_x, .y = row_y, 
-				                   .width = right_width, .height = row_height};
-			resize(rc, geo, 0);
+    layout_row(top, top_count, top_y, top_h, true);
+    layout_row(bottom, bottom_count, bottom_y, bottom_h, false);
 
-			fprintf(stderr, "[DS]     right[%d]: x=%d w=%d\n", i, right_x, right_width);
-			right_x += right_width + cur_gappih;
-		}
-	}
-
-	/* Get gap settings */
-	int ie = enablegaps;
-	int32_t cur_gappiv = ie ? m->gappiv : 0;
-	int32_t cur_gappov = ie ? m->gappov : 0;
-
-	if (smartgaps && m->visible_tiling_clients == 1) {
-		cur_gappiv = 0;
-		cur_gappov = 0;
-	}
-
-	/* Calculate row heights */
-	int32_t avail_h = m->w.height - 2 * cur_gappov;
-	if (avail_h < 1)
-		avail_h = 1;
-
-	int32_t top_h = (int32_t)(avail_h * dual_scroller_split);
-	int32_t bottom_h = avail_h - top_h;
-	
-	if (bottom_count == 0) {
-		top_h = avail_h;
-		bottom_h = 0;
-	}
-	if (top_count == 0) {
-		top_h = 0;
-		bottom_h = avail_h;
-	}
-
-	int32_t top_y = m->w.y + cur_gappov;
-	int32_t bottom_y = top_y + top_h + ((top_count > 0 && bottom_count > 0) ? cur_gappiv : 0);
-
-	fprintf(stderr, "[DS] Row heights: avail=%d, split=%.2f, top=%d, bottom=%d\n",
-		avail_h, dual_scroller_split, top_h, bottom_h);
-
-	/* Layout both rows */
-	layout_row(top_row, top_count, top_y, top_h, m, true);
-	layout_row(bottom_row, bottom_count, bottom_y, bottom_h, m, false);
-
-	/* Cleanup */
-	free(top_row);
-	free(bottom_row);
-
-	fprintf(stderr, "[DS] Arrange complete\n");
+    free(top); free(bottom);
 }
 
-/**
- * Plugin initialization function
- * 
- * This MUST be exported and match the signature:
- *   PluginInfo* plugin_init(void)
- * 
- * Returns a PluginInfo structure describing the plugin and its layouts.
- * The mango compositor will call this when loading the plugin.
- */
+/* Plugin init */
 PluginInfo* plugin_init(void) {
-	fprintf(stderr, "[DS] Plugin init called\n");
-	
-	/* Array of layouts provided by this plugin */
-	static Layout plugin_layouts[] = {
-		{
-			.symbol = "DS",                        /* Symbol shown in status bar */
-			.arrange = dual_scroller_arrange,      /* Function to arrange windows */
-			.name = "dual_scroller",               /* Layout name for selection */
-			.id = 1000,                             /* Unique ID for plugin layouts */
-			.flags = LAYOUT_FLAG_SCROLLER | LAYOUT_FLAG_ROW
-		}
-	};
+    static Layout plugin_layouts[] = {
+        {
+            .symbol = "DS",
+            .arrange = dual_scroller_arrange,
+            .name = "dual_scroller",
+            .id = 1000,
+            .flags = LAYOUT_FLAG_SCROLLER | LAYOUT_FLAG_ROW
+        }
+    };
 
-	/* Plugin metadata */
-	static PluginInfo info = {
-		.name = "dual_scroller",
-		.version = "0.1.0",
-		.description = "Dual Scroller Layout - Two-row tiling with adjustable split",
-		.layouts = plugin_layouts,
-		.num_layouts = 1
-	};
+    static PluginInfo info = {
+        .name = "dual_scroller",
+        .version = "0.1.0",
+        .description = "Dual Scroller Layout - Two-row tiling with adjustable split",
+        .layouts = plugin_layouts,
+        .num_layouts = 1
+    };
 
-	/* Register dispatch functions so the config parser can bind them */
-	fprintf(stderr, "[DS] Registering dispatch: togglerow\n");
-	plugin_register_dispatch("togglerow", (PluginFuncType)togglerow);
-	fprintf(stderr, "[DS] Registering dispatch: adjust_dual_scroller_split\n");
-	plugin_register_dispatch("adjust_dual_scroller_split", (PluginFuncType)adjust_dual_scroller_split);
+    /* Register dispatches with the compositor */
+    plugin_register_dispatch("togglerow", (PluginFuncType)togglerow);
+    plugin_register_dispatch("adjust_dual_scroller_split", (PluginFuncType)adjust_dual_scroller_split);
 
-	fprintf(stderr, "[DS] Plugin init complete\n");
-	return &info;
+    return &info;
 }
-
-

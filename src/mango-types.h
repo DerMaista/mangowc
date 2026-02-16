@@ -19,16 +19,43 @@ typedef struct Client Client;
 typedef struct Monitor Monitor;
 typedef struct Layout Layout;
 typedef struct Pertag Pertag;
+/* Animation types used in core - define here so plugins see complete layout */
+struct dwl_animation {
+	bool should_animate;
+	bool running;
+	bool tagining;
+	bool tagouted;
+	bool tagouting;
+	bool begin_fade_in;
+	bool tag_from_rule;
+	uint32_t time_started;
+	uint32_t duration;
+	struct wlr_box initial;
+	struct wlr_box current;
+	int32_t action;
+};
 
+struct dwl_opacity_animation {
+	bool running;
+	float current_opacity;
+	float target_opacity;
+	float initial_opacity;
+	uint32_t time_started;
+	uint32_t duration;
+	float current_border_color[4];
+	float target_border_color[4];
+	float initial_border_color[4];
+};
 /* Client structure - must match the one in mango.c */
 struct Client {
 	/* Must keep these three elements in this order */
-	uint32_t type;
+	uint32_t type; /* XDGShell or X11* */
 	struct wlr_box geom, pending, float_geom, animainit_geom,
-		overview_backup_geom, current, drag_begin_geom;
+		overview_backup_geom, current,
+		drag_begin_geom; /* layout-relative, includes border */
 	Monitor *mon;
 	struct wlr_scene_tree *scene;
-	struct wlr_scene_rect *border;
+	struct wlr_scene_rect *border; /* top, bottom, left, right */
 	struct wlr_scene_shadow *shadow;
 	struct wlr_scene_tree *scene_surface;
 	struct wl_list link;
@@ -101,13 +128,13 @@ struct Client {
 	float stack_proportion;
 	float old_stack_proportion;
 	bool need_output_flush;
-	uint32_t animation_reserved;  /* Placeholder for animation struct */
-	uint32_t opacity_animation_reserved;  /* Placeholder */
+	struct dwl_animation animation;
+	struct dwl_opacity_animation opacity_animation;
 	int32_t isterm, noswallow;
 	int32_t allow_csd;
 	int32_t force_maximize;
 	int32_t force_tiled_state;
-	int32_t pid;
+	pid_t pid;
 	Client *swallowing, *swallowedby;
 	bool is_clip_to_hide;
 	bool drag_to_tile;
@@ -136,6 +163,7 @@ struct Client {
 	struct Client *next_in_stack;
 	struct Client *prev_in_stack;
 };
+
 
 /* Monitor structure - must match the one in mango.c */
 struct Monitor {
@@ -173,5 +201,11 @@ struct Monitor {
 	char last_surface_ws_name[256];
 	struct wlr_ext_workspace_group_handle_v1 *ext_group;
 };
+
+/* Accessor wrappers exported for plugins to avoid relying on
+ * direct core globals or static functions. Prefer these over
+ * referencing `selmon` or `arrange` directly from plugins. */
+Monitor *get_selmon(void);
+void arrange_mon(Monitor *m, bool want_animation, bool from_view);
 
 #endif /* MANGO_TYPES_H */
